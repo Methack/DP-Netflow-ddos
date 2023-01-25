@@ -60,7 +60,7 @@ int process_file(char *file, lnf_filter_t *filter1){
 			uint64_t bytes;
 			
 			lnf_rec_fget(rec, LNF_FLD_FIRST, &timea);
-		    lnf_rec_fget(rec, LNF_FLD_DOCTETS, &bytes);
+		    	lnf_rec_fget(rec, LNF_FLD_DOCTETS, &bytes);
 			
 			if(bytes == 0)
 				continue;
@@ -68,10 +68,6 @@ int process_file(char *file, lnf_filter_t *filter1){
 			//total number of bytes send in current baseline window
 			bts += bytes;
 			
-			if(bts > 1000000000000){
-				printf("Celkem - %lu, current bytes %lu\n", bts, bytes);
-				break;
-			}
 			//remove ms
 			timea = timea / 1000;
 
