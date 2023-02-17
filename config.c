@@ -2,49 +2,82 @@
 #include <string.h>
 #include <libnf.h>
 
+#include <time.h>
+
 #define STRING_MAX 1024
 #define DEFAULT_BASELINE_WINDOW 300
 #define DEFAULT_MAX_NEWEST_CUTOFF 20
 #define DEFAULT_COEFFICIENT 300
 #define DEFAULT_DB_INSERT_INTERVAL 60
 
-
-
 typedef struct {
-	lnf_filter_t *filter;
-	char *filter_string;
-	int baseline_window;
-	int max_newest_cutoff;
-	int coefficient;
-	int db_insert_interval;
+        lnf_filter_t *filter;
+        char *filter_string;
+		char *db_table;
+        int baseline_window;
+        int max_newest_cutoff;
+        int coefficient;
+        int db_insert_interval;
+        int db_columns[4];
 }Ndd_filter_t;
 
-void ndd_init_filter(Ndd_filter_t **f, char *filters){
+const int col_count = 4;
+const char col[4][16] = {"byte_baseline", "bps", "packet_baseline", "pps"};
+
+char *connection_string;
+
+int filters_count = 0;
+
+Ndd_filter_t **filters;
+
+#include "db.c"
+
+void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 	Ndd_filter_t *p = malloc(sizeof(Ndd_filter_t));
 	if(p){	
 		p->filter = NULL;
-		p->filter_string = strdup(filters);
+		p->filter_string = strdup(fs);
+		if(t)
+			p->db_table = strdup(t);
 		p->baseline_window = -1;
 		p->max_newest_cutoff = -1;
 		p->coefficient = -1;
 		p->db_insert_interval = -1;
+		memset(p->db_columns, 0, col_count*sizeof(int));
 		*f = p;
 	}
 }
 
-void ndd_free_filter(Ndd_filter_t *f){
-	lnf_filter_free(f->filter);
-	free(f->filter_string);
-	free(f);
+void ndd_free_filter(Ndd_filter_t *f, int delete_table){
+	if(f){
+		lnf_filter_free(f->filter);
+		free(f->filter_string);
+		//Check if data stored in database, by this filter, is to be removed
+		if(delete_table)
+			if(ndd_db_drop_table(f->db_table))
+                        	printf("Table dropped - %s\n", f->db_table);
+
+		if(f->db_table)
+			free(f->db_table);
+		free(f);
+	}
 }
 
 void ndd_print_filter_info(Ndd_filter_t *f, int i){
-	printf("----------------------------------------\n");
-	printf("Filter (%d) : %s\n", i, f->filter_string);
-	printf("Values : Baseline_window - %d\n", f->baseline_window);
-	printf("	 Max_newest_cutoff - %d\n", f->max_newest_cutoff);
-	printf("	 Coefficient - %d\n", f->coefficient);
-	printf("	 Db_insert_interval - %d\n", f->db_insert_interval);
+	if(f){
+		printf("----------------------------------------\n");
+		printf("Filter (%d) : %s\n", i, f->filter_string);
+		printf("DB table : %s\n", f->db_table);
+		printf("DB columns : ");
+		for(int i = 0; i < col_count; i++){
+			if(f->db_columns[i] == 1)
+				printf("%s ", col[i]);
+		}
+		printf("\nValues : Baseline_window - %d\n", f->baseline_window);
+		printf("	 Max_newest_cutoff - %d\n", f->max_newest_cutoff);
+		printf("	 Coefficient - %d\n", f->coefficient);
+		printf("	 db_insert_interval - %d\n", f->db_insert_interval);
+	}
 }
 
 int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d, int line_number){
@@ -93,12 +126,18 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 	return 0;
 }
 
+int ndd_active_columns(int *arr){
+	int active_columns = 0;
+	for(int i = 0; i < col_count; i++){
+		if(arr[i] == 1)
+			active_columns++;
+	}
+	return active_columns;
+}
+
 int ndd_config_parse(){
 	FILE *file = fopen("./ndd.conf", "r");
 	int line_number = 0;
-
-	//Number of different filters detected
-	int filters = 1;
 
 	//Temporary array with pointers to filters
 	Ndd_filter_t *ptr_filters[20];
@@ -111,7 +150,7 @@ int ndd_config_parse(){
 	Ndd_filter_t *f1 = NULL;
 
 	Ndd_filter_t *defaults;
-	ndd_init_filter(&defaults, "default");
+	ndd_init_filter(&defaults, "default values", "NONE");
 	ptr_filters[0] = defaults;
 
 	while(fgets(line, STRING_MAX, file)){
@@ -123,6 +162,16 @@ int ndd_config_parse(){
 		//Comments
 		if(sscanf(line, " %[#]", tmp))
 			continue;
+		if(sscanf(line, " connection_string = \"%[^\"]",tmp)){
+			connection_string = strdup(tmp);
+			PGconn *db;
+			if(!(db = ndd_db_connect())){
+                		fprintf(stderr, "Failed to connect to db with connection_string \"%s\"\n", connection_string);
+				exit(1);
+			}
+			PQfinish(db);
+			continue;		
+		}
 		//New Filter
 		if(sscanf(line, " filter = \"%[^\"]", tmp)){
 			int con;
@@ -132,15 +181,30 @@ int ndd_config_parse(){
                         	skip = 1;
                         	continue;
                 	}
-		
-                	ndd_init_filter(&f1, tmp);
+			
+			filters_count++;
+
+                	ndd_init_filter(&f1, tmp, NULL);
 
                 	f1->filter = f;
-			ptr_filters[filters] = f1;
-			filters++;
-
- 			skip = 0;
+			ptr_filters[filters_count] = f1;
+			
+			skip = 0;
 	                continue;
+		}
+		//Columns
+		if(sscanf(line, " columns = \"%[^\"]", tmp)){
+			for(int i = 0; i < col_count; i++){
+				if(strstr(tmp, col[i])){
+					if(f1){
+						f1->db_columns[i] = 1;
+					}else{
+						defaults->db_columns[i] = 1;
+					}
+				}
+
+			}
+			continue;
 		}
 		//Baseline_window
 		if(sscanf(line, " baseline_window = %d", &itmp)){
@@ -174,8 +238,21 @@ int ndd_config_parse(){
 		fprintf(stderr, "Syntax error parsing config on line %d\n", line_number);
 	}
 
+	//Close file stream
+	fclose(file);
+
+	if(!connection_string){
+		fprintf(stderr, "Missing connection_string in config\n");
+		exit(1);
+	}
+
+	//Current time - used for unique db table names
+        char t[11];
+        snprintf(t, 11, "%"PRIu64, (uint64_t)time(NULL));
+
+	int fc = 1;
 	//Check missing values and insert default ones
-	for(int i = 0; i < filters; i++){
+	for(int i = 1; i <= filters_count; i++){
 		Ndd_filter_t *f = ptr_filters[i];
 		if(f->baseline_window < 0){
 			if(defaults->baseline_window < 0){
@@ -205,9 +282,49 @@ int ndd_config_parse(){
 			}
 			f->db_insert_interval = defaults->db_insert_interval;
 		}
+		if(!ndd_active_columns(f->db_columns)){
+			if(!ndd_active_columns(defaults->db_columns)){
+				fprintf(stderr, "Missing default active DB columns list - These will be used : ");
+				for(int i = 0; i < col_count; i++){
+					defaults->db_columns[i] = 1;
+					fprintf(stderr, "%s ", col[i]);
+				}
+			}
+			for(int i = 0; i < col_count; i++){
+				f->db_columns[i] = defaults->db_columns[i];
+			}
+		}
 
-		ndd_print_filter_info(f, i);
+		char tmp[STRING_MAX];
+                sprintf(tmp, "ndd%sf%d",t,i);
+                if(!ndd_db_create_table(tmp, f->db_columns)){//Failed to create table
+			ptr_filters[i] = NULL;
+			ndd_free_filter(f, 0);
+			continue;
+                }
+		printf("Table created %s\n", tmp);
+		f->db_table = strdup(tmp);
+		fc++;
 	}
+	
+	filters = malloc(sizeof(Ndd_filter_t)*fc);
 
-	return filters;
+        if(!filters){
+                fprintf(stderr, "Couldn't allocate memory for filters\n");
+                exit(1);
+        }
+
+
+	//Fill global filters container
+	int c = 0;
+	for(int i = 0; i <= filters_count; i++){
+		if(ptr_filters[i]){
+			filters[c] = ptr_filters[i];
+			ndd_print_filter_info(filters[c], c);
+			c++;	
+		}
+	}
+	filters_count = c;
+	
+	return 0;
 }
