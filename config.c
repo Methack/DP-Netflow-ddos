@@ -1,36 +1,9 @@
-#include <stdio.h>
-#include <string.h>
-#include <libnf.h>
-
 #include <time.h>
 
-#define STRING_MAX 1024
 #define DEFAULT_BASELINE_WINDOW 300
 #define DEFAULT_MAX_NEWEST_CUTOFF 20
 #define DEFAULT_COEFFICIENT 300
 #define DEFAULT_DB_INSERT_INTERVAL 60
-
-typedef struct {
-        lnf_filter_t *filter;
-        char *filter_string;
-		char *db_table;
-        int baseline_window;
-        int max_newest_cutoff;
-        int coefficient;
-        int db_insert_interval;
-        int db_columns[4];
-}Ndd_filter_t;
-
-const int col_count = 4;
-const char col[4][16] = {"byte_baseline", "bps", "packet_baseline", "pps"};
-
-char *connection_string;
-
-int filters_count = 0;
-
-Ndd_filter_t **filters;
-
-#include "db.c"
 
 void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 	Ndd_filter_t *p = malloc(sizeof(Ndd_filter_t));
@@ -162,7 +135,21 @@ int ndd_config_parse(){
 		//Comments
 		if(sscanf(line, " %[#]", tmp))
 			continue;
+		//Nfcapd_current - source file
+		if(sscanf(line, " nfcapd_current = \"%[^\"]", tmp)){
+			if(nfcapd_current){
+				fprintf(stderr, "Reccuring definition of nfcapd_current found on line %d\n", line_number);
+				continue;
+			}
+			nfcapd_current = strdup(tmp);
+			continue;
+		}
+		//Connection string
 		if(sscanf(line, " connection_string = \"%[^\"]",tmp)){
+			if(connection_string){
+				fprintf(stderr, "Reccuring definiton of connection_string found on line %d\n", line_number);
+				continue;
+			}
 			connection_string = strdup(tmp);
 			PGconn *db;
 			if(!(db = ndd_db_connect())){
@@ -194,6 +181,8 @@ int ndd_config_parse(){
 		}
 		//Columns
 		if(sscanf(line, " columns = \"%[^\"]", tmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+                                continue;
 			for(int i = 0; i < col_count; i++){
 				if(strstr(tmp, col[i])){
 					if(f1){
@@ -246,6 +235,11 @@ int ndd_config_parse(){
 		exit(1);
 	}
 
+	if(!nfcapd_current){
+		fprintf(stderr, "Missing nfcapd_current in config\n");
+		exit(1);
+	}
+
 	//Current time - used for unique db table names
         char t[11];
         snprintf(t, 11, "%"PRIu64, (uint64_t)time(NULL));
@@ -294,10 +288,10 @@ int ndd_config_parse(){
 				f->db_columns[i] = defaults->db_columns[i];
 			}
 		}
-
+		
 		char tmp[STRING_MAX];
                 sprintf(tmp, "ndd%sf%d",t,i);
-                if(!ndd_db_create_table(tmp, f->db_columns)){//Failed to create table
+		if(!ndd_db_create_table(tmp, f->db_columns)){//Failed to create table
 			ptr_filters[i] = NULL;
 			ndd_free_filter(f, 0);
 			continue;
@@ -328,3 +322,4 @@ int ndd_config_parse(){
 	
 	return 0;
 }
+
