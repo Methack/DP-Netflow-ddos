@@ -28,12 +28,12 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	PGresult *res;
 	PGconn *db;
 
-    if(!(db = ndd_db_connect()))
+       	if(!(db = ndd_db_connect()))
 		return COMMAND_FAIL;
-
 	
 	int values_count = 0;
 
+	//create sql command for specific filter
 	char sql[STRING_MAX];
 	strcpy(sql, "INSERT INTO ");
 	strcat(sql, table);
@@ -56,9 +56,7 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 		}
 	}
 	strcat(sql, ")");
-	
-	printf("INSERT sql esambled %s\n", sql);
-	
+		
 	char timestamp[11];
 	snprintf(timestamp, 11, "%"PRIu64, time);
 	
@@ -115,6 +113,7 @@ int ndd_db_exec_sql(char *sql){
 }
 
 int ndd_db_drop_table(char *table){
+	
 	char sql[STRING_MAX];
 	strcpy(sql, "DROP TABLE ");
 	strcat(sql, table);
@@ -127,6 +126,8 @@ int ndd_db_drop_table(char *table){
 }
 
 int ndd_db_create_table(char *table, int v[]){
+	//Possible v - byte_baseline, bps, packet_baseline, pps
+	
 	char sql[STRING_MAX];
 	strcpy(sql, "CREATE TABLE ");
 	strcat(sql, table);

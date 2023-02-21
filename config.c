@@ -10,6 +10,9 @@ void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 	if(p){	
 		p->filter = NULL;
 		p->filter_string = strdup(fs);
+		p->stream = NULL;
+		pthread_mutex_init(&p->stream_lock, NULL);
+		p->stream_elements_ready = 0;
 		if(t)
 			p->db_table = strdup(t);
 		p->baseline_window = -1;

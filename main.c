@@ -1,12 +1,18 @@
 #include <libnf.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 
 #define STRING_MAX 1024
+
+typedef struct Ndd_rec_t Ndd_rec_t;
 
 typedef struct {
         lnf_filter_t *filter;
         char *filter_string;
+	Ndd_rec_t **stream;
+	pthread_mutex_t stream_lock;
+	int stream_elements_ready;
         char *db_table;
         int baseline_window;
         int max_newest_cutoff;
@@ -36,7 +42,7 @@ int main(){
 	process_file();
 
 	for(int i = 0; i < filters_count; i++){
-                ndd_free_filter(filters[i], i);
+                ndd_free_filter(filters[i], 0);
         }
 
         free(filters);

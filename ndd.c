@@ -4,8 +4,9 @@
 #include <time.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <pthread.h>
 
-typedef struct Ndd_rec_t Ndd_rec_t;
+
 struct Ndd_rec_t{
 	uint64_t time;
 	uint64_t bytes;
@@ -13,11 +14,6 @@ struct Ndd_rec_t{
 	int processed;
 	Ndd_rec_t *next;
 };
-
-#define FILTER "src port 53"
-#define BASELINE_WINDOW 300 //[s]
-#define MAX_NEWEST_CUTOFF 20
-#define COEFFICIENT 300
 
 
 void ndd_init_rec(Ndd_rec_t **rec, Ndd_rec_t *last){
@@ -39,7 +35,6 @@ void ndd_free_rec(Ndd_rec_t *rec, Ndd_rec_t **first){
 	if(rec){
                 if(rec->next){
                         *first = rec->next;
-			printf("Free -%p- first -%p-\n", rec, (*first));
 		}else{
 			*first = NULL;
 		}
@@ -77,11 +72,12 @@ void ndd_print_rec(Ndd_rec_t *first, int id, int process){
 }
 
 
-int ndd_process_filter_stream(int id, Ndd_rec_t **rec){
+void *ndd_process_filter_stream(void *p){
 	//Get filter information
-	Ndd_filter_t *f = filters[id];
+	int *id = (int *)p;
+	Ndd_filter_t *f = filters[*id];
 	
-	Ndd_rec_t *r = (*rec);
+	Ndd_rec_t **r = f->stream;
 
 	//Bytes
 	uint64_t bts[BASELINE_WINDOW];
@@ -124,86 +120,92 @@ int ndd_process_filter_stream(int id, Ndd_rec_t **rec){
 	}
 	uint64_t values_to_insert[values_count];
 
-	while(1){
-		if(r->processed && r->next == NULL){
-			break;
-			//sleep(0.01);
-			//continue;
-		}else if(!r->processed){
+	while(f->stream){
+		pthread_mutex_lock(&f->stream_lock);
+		
+		if((*r) == NULL){
+			pthread_mutex_unlock(&f->stream_lock);
+			usleep(5000);
+			continue;
+		}
+		if((*r)->processed && (*r)->next == NULL){
+			pthread_mutex_unlock(&f->stream_lock);
+			usleep(5000);
+			continue;
+		}else if(!(*r)->processed){
 			;
-		}else if(r->next){
-				r = r->next;
+		}else if((*r)->next){
+				(*r) = (*r)->next;
 		}
 		
 		//get information from rec
-		time = r->time;
-                bytes = r->bytes;
-                packets = r->packets;
-                r->processed = 1;
-                printf("Rec -%p- is being processed \n", r);
-		printf("Bytes %lu - time %lu - packast %lu\n", bytes, time, packets);
-
+		time = (*r)->time;
+        bytes = (*r)->bytes;
+        packets = (*r)->packets;
+        (*r)->processed = 1;
+		f->stream_elements_ready--;	
+		pthread_mutex_unlock(&f->stream_lock);
 
 		//total number of bytes send in current baseline window
-                bts_sum += bytes;
+        bts_sum += bytes;
 		
 		//total number of packets send in current baseline window
-                pks_sum += packets;
+		pks_sum += packets;
 
-                //remove ms
-                time = time / 1000;
+		//remove ms
+		time = time / 1000;
 
-                //first time
-                if(newest == 0)
-                        newest = time;
+		//first time
+		if(newest == 0)
+				newest = time;
 
-                //calculate index to bps
-                cid = (time - newest) + nid;
-                //correct index to within bounds
-                cid = cid < 0 ? cid + f->baseline_window : cid >= f->baseline_window ? cid - f->baseline_window : cid;
+		//calculate index to bps
+		cid = (time - newest) + nid;
+		//correct index to within bounds
+		cid = cid < 0 ? cid + f->baseline_window : cid >= f->baseline_window ? cid - f->baseline_window : cid;
 
-                //new newest time
-                if(newest < time){
-                        int dif = time - newest;
-                        if(dif < f->max_newest_cutoff){
-				//move in time
-                                sec_prev_insert += dif;
-                                newest = time;
+		//new newest time
+		if(newest < time){
+				int dif = time - newest;
+				if(dif < f->max_newest_cutoff){
+		//move in time
+						sec_prev_insert += dif;
+						newest = time;
 
-				//clear oldest information
-                                for(int j = 1; j <= dif; j++){
-                                        int index = nid + j;
-                                        //correct index to within bounds
-                                        index = index >= f->baseline_window ? index - f->baseline_window : index;
-			
-                                        bts_sum -= bts[index];
-                                        bts[index] = 0;
+		//clear oldest information
+						for(int j = 1; j <= dif; j++){
+								int index = nid + j;
+								//correct index to within bounds
+								index = index >= f->baseline_window ? index - f->baseline_window : index;
+	
+								bts_sum -= bts[index];
+								bts[index] = 0;
 
-                                        pks_sum -= pks[index];
-                                        pks[index] = 0;
-                                }
-                                nid = cid;
-                        }else{
-				//current flow is much newer => add it to current second
-                                cid = nid;
-                        }
-                }
+								pks_sum -= pks[index];
+								pks[index] = 0;
+						}
+						nid = cid;
+				}else{
+		//current flow is much newer => add it to current second
+						cid = nid;
+				}
+		}
 
 
-                if(cid < 0){
-                        //flow is older than baseline window => add to oldest second
-                        if(cid == (f->baseline_window-1)){
-                                bts[0] += bytes;
-                                pks[0] += packets;
-                        }else{
-                                bts[nid+1] += bytes;
-                                pks[nid+1] += packets;
-                        }
-                }else{
-                        //add bytes to specific second
-                        bts[cid] += bytes;
-                        pks[cid] += packets;
-                }
+		if(cid < 0){
+				//flow is older than baseline window => add to oldest second
+				if(nid == (f->baseline_window-1)){
+						bts[0] += bytes;
+						pks[0] += packets;
+				}else{
+						bts[nid+1] += bytes;
+						pks[nid+1] += packets;
+				}
+		}else{
+				//add bytes to specific second
+				bts[cid] += bytes;
+				pks[cid] += packets;
+		}
 		if(f->db_columns[0] || f->db_columns[1]){
                 	//compute new baseline for bytes per second
                 	bps = bts_sum / f->baseline_window;
@@ -217,32 +219,32 @@ int ndd_process_filter_stream(int id, Ndd_rec_t **rec){
 		}
 
 
-                if(sec_prev_insert >= f->db_insert_interval){
+		if(sec_prev_insert >= f->db_insert_interval){
 			int c = 0;
-                	//fill array with values to be stored in db
+					//fill array with values to be stored in db
 			//needs to be filled in specific order
 			for(int i = 0; i < col_count; i++){
-                        	if(f->db_columns[i]){
-                                	switch(i){
-                                        	case 0 : {values_to_insert[c] = bts_baseline; break;}
-                                        	case 1 : {values_to_insert[c] = bps; break;}
-                                	        case 2 : {values_to_insert[c] = pks_baseline; break;}
-                        	                case 3 : {values_to_insert[c] = pps; break;}
-                	                }
+				if(f->db_columns[i]){
+					switch(i){
+							case 0 : {values_to_insert[c] = bts_baseline; break;}
+							case 1 : {values_to_insert[c] = bps; break;}
+							case 2 : {values_to_insert[c] = pks_baseline; break;}
+							case 3 : {values_to_insert[c] = pps; break;}
+					}
 					c++;
-        	                }
-	                }
+				}
+			}
 			//try to insert
 			if(ndd_db_insert(newest, values_to_insert, f->db_table, f->db_columns)){
-                                successful_insert++;
-                        }else{
-                                failed_insert++;
-                        }
-                        sec_prev_insert = 0;
-                }
+					successful_insert++;
+			}else{
+					failed_insert++;
+			}
+			sec_prev_insert = 0;
+		}
 	}
 
-	return 0;
+	return NULL;
 }
 
 
@@ -267,14 +269,25 @@ int process_file(){
 
         Ndd_rec_t *first[filters_count];
         Ndd_rec_t *last[filters_count];
+
+	pthread_t th;
+
+	int is[filters_count];
+	
+
         for(int i = 0; i < filters_count; i++){
                 first[i] = NULL;
                 last[i] = NULL;
+		if(i == 1){
+			filters[i]->stream = &first[i];
+	                is[i] = i;
+			if(pthread_create(&th, NULL, ndd_process_filter_stream, &is[i])){
+				fprintf(stderr, "Failed to create thread\n");
+			}
+		}
         }
 
-	//fork
-
-        int count = 0;
+	uint64_t count = 0;
 
 	while(1){
                 ret = lnf_read(filep, rec);
@@ -288,11 +301,14 @@ int process_file(){
                                 lnf_rec_fget(rec, LNF_FLD_DOCTETS, &bytes);
                                 if(bytes == 0)
                                         break;
+					
+				count++;
 
                                 lnf_rec_fget(rec, LNF_FLD_FIRST, &time);
                                 //lnf_rec_fget(rec, LNF_FLD_LAST, &time);
                                 lnf_rec_fget(rec, LNF_FLD_DPKTS, &packets);
-
+				
+				pthread_mutex_lock(&filters[i]->stream_lock);
                                 //Remove processed
                                 ndd_free_rec_processed(first[i], &first[i]);
                                 if(first[i] == NULL)
@@ -303,21 +319,33 @@ int process_file(){
                                 if(first[i] == NULL)
                                         first[i] = last[i];
 
+				filters[i]->stream_elements_ready++;
+				pthread_mutex_unlock(&filters[i]->stream_lock);
+
                                 last[i]->time = time;
                                 last[i]->bytes = bytes;
                                 last[i]->packets = packets;
                         }
                 }
-                if(count > 20){
-                        break;
-                }
-
         }
+	
+	while(filters[1]->stream_elements_ready){
+		sleep(1);
+	}
+	filters[1]->stream = NULL;
+
+	if(pthread_join(th, NULL)){
+                fprintf(stderr, "error\n");
+        }
+
 
         for(int i = 1; i < filters_count ;i++){
                 ndd_print_rec(first[i], i, 1);
         	ndd_free_rec_processed(first[i], &first[i]);
 	}
+
+
+	printf("Bylo tam %lu zaznamu\n", count);
 
 
         lnf_rec_free(rec);
