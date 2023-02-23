@@ -36,15 +36,22 @@ Ndd_filter_t **filters;
 #include "ndd.c"
 
 
-int main(){
+int main(int argc, char **argv){
 	ndd_config_parse();
 
+
+	if(argc == 2){
+		if(!daemonize()){
+                	fprintf(stderr, "Failed to daemonize");
+                	return 1;
+        	}
+	}
 	process_file();
 
 	for(int i = 0; i < filters_count; i++){
                 ndd_free_filter(filters[i], 0);
         }
-
+	(void) argv;
         free(filters);
         return 0;
 }

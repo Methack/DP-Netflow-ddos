@@ -60,32 +60,44 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 	int *target_value;
 	switch (what){
 		case 'b' : {
-			if(f == NULL)
+			if(f == NULL){
 				target_value = &d->baseline_window;
-			else
+			}else{
 				target_value = &f->baseline_window;
+				if(d->baseline_window < 0)
+					d->baseline_window = value;
+			}
 			break;
 		}
 		case 'm' : {
-			if(f == NULL)
+			if(f == NULL){
 				target_value = &d->max_newest_cutoff;	     
-			else
+			}else{
 				target_value = &f->max_newest_cutoff;
+				if(d->max_newest_cutoff < 0)
+					d->max_newest_cutoff = value;
+			}
 			break;
 		}
 		case 'c' : {
-			if(f == NULL)
+			if(f == NULL){
 				target_value = &d->coefficient;
-			else
+			}else{
 				target_value = &f->coefficient;
+				if(d->coefficient < 0)
+					d->coefficient = value;
+			}
 			break;		
 		}
 		case 'd' : {
-			if(f == NULL)
+			if(f == NULL){
 				target_value = &d->db_insert_interval;
-			else
+			}else{
 				target_value = &f->db_insert_interval;
-	    		break;		
+				if(d->db_insert_interval < 0)
+					d->db_insert_interval = value;
+			}
+			break;		
 		}
 	}
 
@@ -294,7 +306,8 @@ int ndd_config_parse(){
 		
 		char tmp[STRING_MAX];
                 sprintf(tmp, "ndd%sf%d",t,i);
-		if(!ndd_db_create_table(tmp, f->db_columns)){//Failed to create table
+		if(!ndd_db_create_table(tmp, f->db_columns)){
+			//Failed to create table
 			ptr_filters[i] = NULL;
 			ndd_free_filter(f, 0);
 			continue;
