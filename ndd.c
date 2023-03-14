@@ -126,6 +126,10 @@ void *ndd_process_filter_stream(void *p){
 	uint64_t bytes = 0;
 	uint64_t packets = 0;
 
+	//variables used for attack detection
+	uint64_t prev_baseline = 0;
+	int window_filled = 0;
+
 	//information
 	int values_count = 0;
 	for(int i = 0; i < col_count; i++){
@@ -247,6 +251,13 @@ void *ndd_process_filter_stream(void *p){
 		}
 
 
+		//check for substantial increase in baseline
+		if(window_filled){
+			if(prev_baseline < (bts_baseline * f->max_baseline_increase)){
+					printf("Big increase\n");
+			}
+		}
+
                 if(sec_prev_insert >= f->db_insert_interval){
 			int c = 0;
                 	//fill array with values to be stored in db
@@ -265,15 +276,19 @@ void *ndd_process_filter_stream(void *p){
 			//try to insert
 			if(ndd_db_insert(newest, values_to_insert, f->db_table, f->db_columns)){
                                 successful_insert++;
+				if(!window_filled){
+					//if baseline_window is filled start checking increases in baseline
+					window_filled = successful_insert * f->db_insert_interval > f->baseline_window ? 1 : 0;
+				}
 				printf("Filter #%d => %d(-%d): bt_Baseline inserted - %lu | pk_Baseline inserted %lu |records ready - %d|\n", (*id), successful_insert, failed_insert, bts_baseline, pks_baseline, f->stream_elements_ready);
                         }else{
                                 failed_insert++;
                         }
                         sec_prev_insert = 0;
                 }
-		if(successful_insert > 30){
-			stop = 0;
-		}
+		//if(successful_insert > 30){
+		//	stop = 0;
+		//}
 	}
 
 	return NULL;
@@ -284,7 +299,7 @@ int process_file(){
         lnf_file_t *filep;
         lnf_rec_t *rec;
 
-        int loopread = 1;
+        int loopread = 0;
 
         if(lnf_open(&filep, nfcapd_current, LNF_READ | loopread ? LNF_READ_LOOP : 0, NULL) != LNF_OK){
                 fprintf(stderr, "Failed to open file %s\n", nfcapd_current);
@@ -414,3 +429,4 @@ int daemonize(){
 
 	return 1;
 }
+

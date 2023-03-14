@@ -15,6 +15,7 @@ typedef struct {
 	int stream_elements_ready;
         char *db_table;
         int baseline_window;
+	int max_baseline_increase;
         int max_newest_cutoff;
         int coefficient;
         int db_insert_interval;

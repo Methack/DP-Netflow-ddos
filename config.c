@@ -4,6 +4,7 @@
 #define DEFAULT_MAX_NEWEST_CUTOFF 20
 #define DEFAULT_COEFFICIENT 300
 #define DEFAULT_DB_INSERT_INTERVAL 60
+#define DEFAULT_MAX_BASELINE_INCREASE 3
 
 void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 	Ndd_filter_t *p = malloc(sizeof(Ndd_filter_t));
@@ -19,6 +20,7 @@ void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 		p->max_newest_cutoff = -1;
 		p->coefficient = -1;
 		p->db_insert_interval = -1;
+		p->max_baseline_increase = -1;
 		memset(p->db_columns, 0, col_count*sizeof(int));
 		*f = p;
 	}
@@ -53,6 +55,7 @@ void ndd_print_filter_info(Ndd_filter_t *f, int i){
 		printf("	 Max_newest_cutoff - %d\n", f->max_newest_cutoff);
 		printf("	 Coefficient - %d\n", f->coefficient);
 		printf("	 db_insert_interval - %d\n", f->db_insert_interval);
+		printf("	 Max_baseline_increase - %d\n", f->max_baseline_increase);
 	}
 }
 
@@ -99,6 +102,15 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 			}
 			break;		
 		}
+		case 'i' : {
+			if(f == NULL){
+				target_value = &d->max_baseline_increase;
+			}else{
+				target_value = &f->max_baseline_increase;
+				if(d->max_baseline_increase < 0)
+					d->max_baseline_increase = value;
+			}	   
+		}
 	}
 
 	if(*target_value > 0){
@@ -128,12 +140,12 @@ int ndd_config_parse(){
 	int line_number = 0;
 
 	//Temporary array with pointers to filters
-	Ndd_filter_t *ptr_filters[20];
+	Ndd_filter_t *ptr_filters[50];
 
 	char line[STRING_MAX];
 	char tmp[STRING_MAX];
 	int itmp;
-	int skip;
+	int skip = 0;
 
 	Ndd_filter_t *f1 = NULL;
 
@@ -238,6 +250,13 @@ int ndd_config_parse(){
                         ndd_config_parse_fint(itmp, 'd', f1, defaults, line_number);
                         continue;
                 }
+		//Max_baseline_increase
+		if(sscanf(line, " max_baseline_increase = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+                                continue;
+			ndd_config_parse_fint(itmp, 'i', f1, defaults, line_number);
+                        continue;
+		}
 
 		fprintf(stderr, "Syntax error parsing config on line %d\n", line_number);
 	}
@@ -298,15 +317,23 @@ int ndd_config_parse(){
 					defaults->db_columns[i] = 1;
 					fprintf(stderr, "%s ", col[i]);
 				}
+				fprintf(stderr, "\n");
 			}
 			for(int i = 0; i < col_count; i++){
 				f->db_columns[i] = defaults->db_columns[i];
 			}
 		}
+		if(f->max_baseline_increase < 0){
+			if(defaults->max_baseline_increase < 0){
+				fprintf(stderr, "Missing default value for max_baseline_increase - Values \'%d\' will be used\n", DEFAULT_MAX_BASELINE_INCREASE);
+				defaults->max_baseline_increase = DEFAULT_MAX_BASELINE_INCREASE;
+			}
+			f->max_baseline_increase = defaults->max_baseline_increase;
+		}
 		
 		char tmp[STRING_MAX];
                 sprintf(tmp, "ndd%sf%d",t,i);
-		if(!ndd_db_create_table(tmp, f->db_columns)){
+		if(!ndd_db_create_table(tmp, f->db_columns, f->filter_string)){
 			//Failed to create table
 			ptr_filters[i] = NULL;
 			ndd_free_filter(f, 0);
@@ -331,7 +358,7 @@ int ndd_config_parse(){
 		if(ptr_filters[i]){
 			filters[c] = ptr_filters[i];
 			ndd_print_filter_info(filters[c], c);
-			c++;	
+			c++;
 		}
 	}
 	filters_count = c;

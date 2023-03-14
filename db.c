@@ -28,7 +28,7 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	PGresult *res;
 	PGconn *db;
 
-       	if(!(db = ndd_db_connect()))
+    if(!(db = ndd_db_connect()))
 		return COMMAND_FAIL;
 	
 	int values_count = 0;
@@ -125,9 +125,35 @@ int ndd_db_drop_table(char *table){
 	return COMMAND_OK;
 }
 
-int ndd_db_create_table(char *table, int v[]){
-	//Possible v - byte_baseline, bps, packet_baseline, pps
-	
+int ndd_db_insert_filters(char *table, char *filter_string){
+        PGresult *res;
+        PGconn *db;
+
+        if(!(db = ndd_db_connect())){
+                return COMMAND_FAIL;
+        }
+
+        char sql[STRING_MAX] = "INSERT INTO filters (id, filter) VALUES ($1, $2)";
+
+        const char * const param_values[] = {table, filter_string};
+
+        res = PQexecParams(db, sql, 2, NULL, param_values, NULL, NULL, 0);
+        if(PQresultStatus(res) != PGRES_COMMAND_OK){
+                fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
+                PQclear(res);
+                PQfinish(db);
+                return COMMAND_FAIL;
+        }
+
+        PQclear(res);
+        PQfinish(db);
+
+        return COMMAND_OK;
+}
+
+
+int ndd_db_create_table(char *table, int v[], char *filter_string){
+	//Create sql string
 	char sql[STRING_MAX];
 	strcpy(sql, "CREATE TABLE ");
 	strcat(sql, table);
@@ -140,16 +166,27 @@ int ndd_db_create_table(char *table, int v[]){
 			strcat(sql, " bigint");
 		}
 	}
-
 	strcat(sql, ")");
 
+	//Try to create table for filter
 	if(!ndd_db_exec_sql(sql)){
 		fprintf(stderr, "Failed to create table %s\n", table);
 		return COMMAND_FAIL;
 	}
-	return COMMAND_OK;
+
+	//Successfully created table for filter, now try to insert its information into db
+	if(ndd_db_insert_filters(table, filter_string))
+		return COMMAND_OK;
+
+	//Failed to insert info into db => delete table created before
+	if(ndd_db_drop_table(table)){
+		fprintf(stderr, "Failed to insert into filters\n");
+		return COMMAND_FAIL;
+	}
+	
+	//Failed to delete table created before
+	fprintf(stderr, "Multiple failures when trying to establish new filter in DB\n");
+	return COMMAND_FAIL;
 }
-
-
 
 
