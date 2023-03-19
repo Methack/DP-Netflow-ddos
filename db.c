@@ -28,12 +28,13 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	PGresult *res;
 	PGconn *db;
 
-    if(!(db = ndd_db_connect()))
+       	if(!(db = ndd_db_connect()))
 		return COMMAND_FAIL;
 	
 	int values_count = 0;
 
 	//create sql command for specific filter
+	//possible sql => "INSERT INTO test(time, bytes, packets, bps, pps) VALUES (to_timestamp($1), $2, $3, $4, $5)";
 	char sql[STRING_MAX];
 	strcpy(sql, "INSERT INTO ");
 	strcat(sql, table);
@@ -57,17 +58,21 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	}
 	strcat(sql, ")");
 		
+	//transform timestamp into pg friendly format
 	char timestamp[11];
 	snprintf(timestamp, 11, "%"PRIu64, time);
 	
+	//inicialize arrays
 	const char *param_values[values_count+1];
 	int param_lengths[values_count+1];
 	int param_formats[values_count+1];
 
+	//insert timestamp values into arrays
 	param_values[0] = timestamp;
 	param_lengths[0] = 11;
 	param_formats[0] = 0;
 
+	//insert specific values for every column
 	uint64_t htonll_values[values_count];
 	for(int i = 0; i < values_count; i++){
 			htonll_values[i] = htonll(values[i]);
@@ -133,7 +138,7 @@ int ndd_db_insert_filters(char *table, char *filter_string){
                 return COMMAND_FAIL;
         }
 
-        char sql[STRING_MAX] = "INSERT INTO filters (id, filter) VALUES ($1, $2)";
+        char *sql = "INSERT INTO filters (id, filter) VALUES ($1, $2)";
 
         const char * const param_values[] = {table, filter_string};
 
@@ -151,6 +156,42 @@ int ndd_db_insert_filters(char *table, char *filter_string){
         return COMMAND_OK;
 }
 
+int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64_t prev){
+	PGconn *db;
+	PGresult *res;
+
+	if(!(db = ndd_db_connect())){
+                return COMMAND_FAIL;
+        }
+
+	char *sql = "INSERT INTO detected (id, time, baseline, prev_baseline) VALUES ($1, to_timestamp($2), $3, $4)";
+
+	//transform timestamp into pg friendly format
+	char timestamp[11];
+	snprintf(timestamp, 11, "%"PRIu64, time);
+
+	
+	uint64_t c = htonll(current);
+	uint64_t p = htonll(prev);
+
+	const char * const param_values[] = {table, timestamp, (char *)&c, (char *)&p};
+	const int param_formats[] = {1,0,1,1};
+	const int param_lengths[] = {strlen(table), 11, sizeof(uint64_t), sizeof(uint64_t)};
+
+	
+
+	res = PQexecParams(db, sql, 4, NULL, param_values, param_lengths, param_formats, 0);
+	if(PQresultStatus(res) != PGRES_COMMAND_OK){
+                fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
+                PQclear(res);
+                PQfinish(db);
+                return COMMAND_FAIL;
+        }
+	PQclear(res);
+        PQfinish(db);
+
+        return COMMAND_OK;
+}
 
 int ndd_db_create_table(char *table, int v[], char *filter_string){
 	//Create sql string
@@ -174,7 +215,7 @@ int ndd_db_create_table(char *table, int v[], char *filter_string){
 		return COMMAND_FAIL;
 	}
 
-	//Successfully created table for filter, now try to insert its information into db
+	//Successfully created table for filter, now try to insert its information into 'filters' table
 	if(ndd_db_insert_filters(table, filter_string))
 		return COMMAND_OK;
 
@@ -185,8 +226,36 @@ int ndd_db_create_table(char *table, int v[], char *filter_string){
 	}
 	
 	//Failed to delete table created before
-	fprintf(stderr, "Multiple failures when trying to establish new filter in DB\n");
+	fprintf(stderr, "Multiple failures when trying to establish new filter in db\n");
 	return COMMAND_FAIL;
+}
+
+int ndd_db_check_and_prepare(){
+	//table 'filters' contains:
+	//	'id' - table name of specific filter
+	//	'filter' - filter string specified in config
+	//	'active' - if filter is active (ndd instance is storing information into this filters table)
+	char *sql_f = "CREATE TABLE IF NOT EXISTS filters (id varchar(20), filter text, active boolean DEFAULT true)";
+
+	//table 'detected' contains:
+	//	'id' - table name of specific filter
+	//	'time' - timestamp when detection occourred
+	//	'baseline' - current baseline in time of detection
+	//	'prev_baseline' - previous baseline that is being compared to current one
+	char *sql_d = "CREATE TABLE IF NOT EXISTS detected (id varchar(20), time timestamp, baseline bigint, prev_baseline bigint)";
+	
+	//try to create table for filters
+	if(!ndd_db_exec_sql(sql_f)){
+		return COMMAND_FAIL;
+	}
+
+	//try to create table for detected
+	if(!ndd_db_exec_sql(sql_d)){
+		return COMMAND_FAIL;
+	}
+
+	//successfully created both tables
+	return COMMAND_OK;
 }
 
 

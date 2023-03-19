@@ -178,12 +178,10 @@ int ndd_config_parse(){
 				continue;
 			}
 			connection_string = strdup(tmp);
-			PGconn *db;
-			if(!(db = ndd_db_connect())){
-                		fprintf(stderr, "Failed to connect to db with connection_string \"%s\"\n", connection_string);
+			//check db connection and create necessary tables
+			if(!ndd_db_check_and_prepare()){
 				exit(1);
 			}
-			PQfinish(db);
 			continue;		
 		}
 		//New Filter
