@@ -1,10 +1,26 @@
-#include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 
-#define DEFAULT_BASELINE_WINDOW 300
-#define DEFAULT_MAX_NEWEST_CUTOFF 20
-#define DEFAULT_COEFFICIENT 300
-#define DEFAULT_DB_INSERT_INTERVAL 60
-#define DEFAULT_MAX_BASELINE_INCREASE 3
+#define DEFAULT_BASELINE_WINDOW		300
+#define DEFAULT_DATASET_WINDOW		30
+#define DEFAULT_DATASET_CHUNKS		6
+#define DEFAULT_THSTEP			4
+#define DEFAULT_THSTEPS			4
+#define DEFAULT_MAX_NEWEST_CUTOFF	20
+#define DEFAULT_COEFFICIENT		300
+#define DEFAULT_DB_INSERT_INTERVAL	60
+#define DEFAULT_MAX_BASELINE_INCREASE	3
+
+#define NDD_BASELINE_WINDOW		0x01
+#define NDD_DATASET_WINDOW		0x02
+#define NDD_DATASET_CHUNKS		0x03
+#define NDD_THSTEP			0x04
+#define NDD_THSTEPS			0x05
+#define NDD_MAX_NEWEST_CUTOFF		0x06
+#define NDD_COEFFICIENT			0x07
+#define NDD_DB_INSERT_INTERVAL		0x08
+#define NDD_MAX_BASELINE_INCREASE	0x09
 
 void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 	Ndd_filter_t *p = malloc(sizeof(Ndd_filter_t));
@@ -13,10 +29,16 @@ void ndd_init_filter(Ndd_filter_t **f, char *fs, char *t){
 		p->filter_string = strdup(fs);
 		p->stream = NULL;
 		pthread_mutex_init(&p->stream_lock, NULL);
-		p->stream_elements_ready = 0;
+		p->stream_elements = 0;
 		if(t)
 			p->db_table = strdup(t);
 		p->baseline_window = -1;
+		p->dataset_window = -1;
+		p->dataset_chunks = -1;
+		memset(p->eval_items, 0, items_count*sizeof(int));
+		memset(p->required_items, 0, items_count*sizeof(int));
+		p->thsteps = -1;
+		p->thstep = -1;
 		p->max_newest_cutoff = -1;
 		p->coefficient = -1;
 		p->db_insert_interval = -1;
@@ -54,15 +76,30 @@ void ndd_print_filter_info(Ndd_filter_t *f, int i){
 		printf("\nValues : Baseline_window - %d\n", f->baseline_window);
 		printf("	 Max_newest_cutoff - %d\n", f->max_newest_cutoff);
 		printf("	 Coefficient - %d\n", f->coefficient);
-		printf("	 db_insert_interval - %d\n", f->db_insert_interval);
+		printf("	 Db_insert_interval - %d\n", f->db_insert_interval);
 		printf("	 Max_baseline_increase - %d\n", f->max_baseline_increase);
+		printf("	 Dataset_window - %d\n", f->dataset_window);
+		printf("	 Dataset_chunks - %d\n", f->dataset_chunks);
+		printf("	 Thsteps - %d | Thstep - %d\n", f->thsteps, f->thstep);
+		printf("	 Eval_items : ");
+		for(int i = 0; i < items_count; i++){
+			if(f->eval_items[i] > 0)
+				printf("%s ", items_text[f->eval_items[i]]);
+		}
+		printf("\n");
+		printf("         Required_items : ");
+		for(int i = 0; i < items_count; i++){
+			if(f->required_items[i] > 0)
+				printf("%s ", items_text[f->required_items[i]]);
+		}
+		printf("\n");
 	}
 }
 
-int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d, int line_number){
+int ndd_config_parse_fint(int value, int field, Ndd_filter_t *f, Ndd_filter_t *d, int line_number){
 	int *target_value;
-	switch (what){
-		case 'b' : {
+	switch (field){
+		case NDD_BASELINE_WINDOW : {
 			if(f == NULL){
 				target_value = &d->baseline_window;
 			}else{
@@ -72,7 +109,7 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 			}
 			break;
 		}
-		case 'm' : {
+		case NDD_MAX_NEWEST_CUTOFF : {
 			if(f == NULL){
 				target_value = &d->max_newest_cutoff;	     
 			}else{
@@ -82,7 +119,7 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 			}
 			break;
 		}
-		case 'c' : {
+		case NDD_COEFFICIENT : {
 			if(f == NULL){
 				target_value = &d->coefficient;
 			}else{
@@ -92,7 +129,7 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 			}
 			break;		
 		}
-		case 'd' : {
+		case NDD_DB_INSERT_INTERVAL : {
 			if(f == NULL){
 				target_value = &d->db_insert_interval;
 			}else{
@@ -102,14 +139,55 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 			}
 			break;		
 		}
-		case 'i' : {
+		case NDD_MAX_BASELINE_INCREASE : {
 			if(f == NULL){
 				target_value = &d->max_baseline_increase;
 			}else{
 				target_value = &f->max_baseline_increase;
 				if(d->max_baseline_increase < 0)
 					d->max_baseline_increase = value;
-			}	   
+			}	
+		     	break;	
+		}
+		case NDD_THSTEP : {
+			if(f == NULL){
+				target_value = &d->thstep;
+			}else{
+				target_value = &f->thstep;
+				if(d->thstep < 0)
+					d->thstep = value;
+			}
+			break;
+		}
+		case NDD_THSTEPS : {
+			if(f == NULL){
+				target_value = &d->thsteps;
+			}else{
+				target_value = &f->thsteps;
+				if(d->thsteps < 0)
+						d->thsteps = value;
+			}
+			break;		
+		}
+		case NDD_DATASET_WINDOW : {
+			if(f == NULL){
+				target_value = &d->dataset_window;
+			}else{
+				target_value = &f->dataset_window;
+				if(d->dataset_window < 0)
+						d->dataset_window = value;
+			}
+			break;
+		}
+		case NDD_DATASET_CHUNKS : {
+			if(f == NULL){
+				target_value = &d->dataset_chunks;
+			}else{
+				target_value = &f->dataset_chunks;
+				if(d->dataset_chunks < 0)
+						d->dataset_chunks = value;
+			}
+			break;
 		}
 	}
 
@@ -126,13 +204,42 @@ int ndd_config_parse_fint(int value, char what, Ndd_filter_t *f, Ndd_filter_t *d
 	return 0;
 }
 
-int ndd_active_columns(int *arr){
-	int active_columns = 0;
-	for(int i = 0; i < col_count; i++){
-		if(arr[i] == 1)
-			active_columns++;
+int ndd_active_array_items(int *arr, int length){
+	int active_items = 0;
+	for(int i = 0; i < length; i++){
+		if(arr[i] > 0)
+			active_items++;
 	}
-	return active_columns;
+	return active_items;
+}
+
+void ndd_fill_items(char* tmp, int *target){
+	int positions[items_count];
+	memset(&positions[0], '0', items_count*sizeof(int));
+	int found = 0;
+        //find positions
+	for(int i = 1; i < items_count; i++){
+		char *pos = strstr(tmp, items_text[i]);
+		if(pos){
+			found++;
+			positions[i] = (int)(pos - tmp) + 1;
+		}
+	}
+	//fill target
+	for(int i = 0; i < found; i++){
+		int min_position = 0;
+		int min_position_index = 0;
+		for(int j = 1; j < items_count; j++){
+			if(positions[j] == 0)
+				continue;
+			if(min_position == 0 || min_position > positions[j]){
+				min_position = positions[j];
+				min_position_index = j;
+			}
+		}
+		target[i] = min_position_index;
+		positions[min_position_index] = 0;
+	}
 }
 
 int ndd_config_parse(){
@@ -220,40 +327,88 @@ int ndd_config_parse(){
 			}
 			continue;
 		}
+		//Eval_items
+		if(sscanf(line, " eval_items = \"%[^\"]", tmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+                                continue;
+			if(f1)
+				ndd_fill_items(tmp, f1->eval_items);
+			else
+				ndd_fill_items(tmp, defaults->eval_items);
+			continue;
+		}
+		//Required_items
+                if(sscanf(line, " required_items = \"%[^\"]", tmp)){
+                        if(skip) //Skip - This value bellongs to failed filter
+                                continue;
+                        if(f1)
+                                ndd_fill_items(tmp, f1->required_items);
+                        else
+                                ndd_fill_items(tmp, defaults->required_items);
+                        continue;
+                }
 		//Baseline_window
 		if(sscanf(line, " baseline_window = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
 				continue;
-	                ndd_config_parse_fint(itmp, 'b', f1, defaults, line_number);
+			ndd_config_parse_fint(itmp, NDD_BASELINE_WINDOW, f1, defaults, line_number);
 			continue;
 		}
 		//Max_newest_cutoff
 		if(sscanf(line, " max_newest_cutoff = %d", &itmp)){
-                	if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, 'm', f1, defaults, line_number);
-                        continue;
+			if(skip) //Skip - This value bellongs to failed filter
+					continue;
+			ndd_config_parse_fint(itmp, NDD_MAX_NEWEST_CUTOFF, f1, defaults, line_number);
+			continue;
 		}
 		//Coefficient
 		if(sscanf(line, " coefficient = %d", &itmp)){
-                	if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, 'c', f1, defaults, line_number);
-                        continue;
+			if(skip) //Skip - This value bellongs to failed filter
+					continue;
+			ndd_config_parse_fint(itmp, NDD_COEFFICIENT, f1, defaults, line_number);
+			continue;
 		}
 		//Db_insert_interval
 		if(sscanf(line, " db_insert_interval = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, 'd', f1, defaults, line_number);
-                        continue;
-                }
+					continue;
+			ndd_config_parse_fint(itmp, NDD_DB_INSERT_INTERVAL, f1, defaults, line_number);
+			continue;
+		}
 		//Max_baseline_increase
 		if(sscanf(line, " max_baseline_increase = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-			ndd_config_parse_fint(itmp, 'i', f1, defaults, line_number);
-                        continue;
+					continue;
+			ndd_config_parse_fint(itmp, NDD_MAX_BASELINE_INCREASE, f1, defaults, line_number);
+			continue;
+		}
+		//Dataset_window
+		if(sscanf(line, " dataset_window = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_DATASET_WINDOW, f1, defaults, line_number);
+			continue;
+		}
+		//Dataset_chunks
+		if(sscanf(line, " dataset_chunks = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+					continue;
+			ndd_config_parse_fint(itmp, NDD_DATASET_CHUNKS, f1, defaults, line_number);
+			continue;
+		}
+		//Thsteps
+		if(sscanf(line, " thsteps = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+					continue;
+			ndd_config_parse_fint(itmp, NDD_THSTEPS, f1, defaults, line_number);
+			continue;
+		}
+		//Thstep
+		if(sscanf(line, " thstep = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+					continue;
+			ndd_config_parse_fint(itmp, NDD_THSTEP, f1, defaults, line_number);
+			continue;
 		}
 
 		fprintf(stderr, "Syntax error parsing config on line %d\n", line_number);
@@ -262,15 +417,24 @@ int ndd_config_parse(){
 	//Close file stream
 	fclose(file);
 
+	//No db connection_string in config, abort
 	if(!connection_string){
 		fprintf(stderr, "Missing connection_string in config\n");
 		exit(1);
 	}
-
+	
+	//No nfcapd_current path in config, abort
 	if(!nfcapd_current){
 		fprintf(stderr, "Missing nfcapd_current in config\n");
 		exit(1);
 	}
+
+	//Failed to create dataset dir, abort
+	if(mkdir("./datasets/", 0777) && errno != EEXIST){
+		fprintf(stderr, "Failed to create dataset dir - %s\n", strerror(errno));
+		exit(1);
+	}
+
 
 	//Current time - used for unique db table names
         char t[11];
@@ -296,7 +460,7 @@ int ndd_config_parse(){
 		}
 		if(f->coefficient < 0){
 			if(defaults->coefficient < 0){
-				fprintf(stderr, "Missing default value for coefficient - Values \'%d\' will be used\n", DEFAULT_COEFFICIENT);
+				fprintf(stderr, "Missing default value for coefficient - Value \'%d\' will be used\n", DEFAULT_COEFFICIENT);
 				defaults->coefficient = DEFAULT_COEFFICIENT;
 			}
 			f->coefficient = defaults->coefficient;
@@ -308,8 +472,8 @@ int ndd_config_parse(){
 			}
 			f->db_insert_interval = defaults->db_insert_interval;
 		}
-		if(!ndd_active_columns(f->db_columns)){
-			if(!ndd_active_columns(defaults->db_columns)){
+		if(!ndd_active_array_items(f->db_columns, col_count)){
+			if(!ndd_active_array_items(defaults->db_columns, col_count)){
 				fprintf(stderr, "Missing default active DB columns list - These will be used : ");
 				for(int i = 0; i < col_count; i++){
 					defaults->db_columns[i] = 1;
@@ -323,31 +487,96 @@ int ndd_config_parse(){
 		}
 		if(f->max_baseline_increase < 0){
 			if(defaults->max_baseline_increase < 0){
-				fprintf(stderr, "Missing default value for max_baseline_increase - Values \'%d\' will be used\n", DEFAULT_MAX_BASELINE_INCREASE);
+				fprintf(stderr, "Missing default value for max_baseline_increase - Value \'%d\' will be used\n", DEFAULT_MAX_BASELINE_INCREASE);
 				defaults->max_baseline_increase = DEFAULT_MAX_BASELINE_INCREASE;
 			}
 			f->max_baseline_increase = defaults->max_baseline_increase;
 		}
-		
+		if(!ndd_active_array_items(f->eval_items, items_count)){
+			if(!ndd_active_array_items(defaults->eval_items, items_count)){
+				fprintf(stderr, "Missing default value for eval_items - These will be used : dstip srcip srcport\n");
+				defaults->eval_items[0] = 2;
+				defaults->eval_items[1] = 1;
+				defaults->eval_items[2] = 4;
+			}
+			for(int i = 0; i < items_count; i++){
+				f->eval_items[i] = defaults->eval_items[i];
+			}
+		}
+		if(!ndd_active_array_items(f->required_items, items_count)){
+			if(!ndd_active_array_items(defaults->required_items, items_count)){
+				fprintf(stderr, "Missing default value for required_items - These will be used : dstip srcip\n");
+				defaults->required_items[0] = 2;
+				defaults->required_items[1] = 1;
+			}
+			for(int i = 0; i < items_count; i++){
+				f->required_items[i] = defaults->required_items[i];
+			}
+		}
+		if(f->dataset_window < 0){
+			if(defaults->dataset_window < 0){
+				fprintf(stderr, "Missing default value for dataset_window - Value \'%d\' will be used\n", DEFAULT_DATASET_WINDOW);
+				defaults->dataset_window = DEFAULT_DATASET_WINDOW;
+			}
+			f->dataset_window = defaults->dataset_window;
+		}
+		if(f->dataset_chunks < 0){
+			if(defaults->dataset_chunks < 0){
+				fprintf(stderr, "Missing default value for dataset_chunks - Value \'%d\' will be used\n", DEFAULT_DATASET_CHUNKS);
+				defaults->dataset_chunks = DEFAULT_DATASET_CHUNKS;
+			}
+			f->dataset_chunks = defaults->dataset_chunks;
+		}
+		if(f->thsteps < 0){
+			if(defaults->thsteps < 0){
+				fprintf(stderr, "Missing default value for thsteps - Value \'%d\' will be used\n", DEFAULT_THSTEPS);
+				defaults->thsteps = DEFAULT_THSTEPS;
+			}
+			f->thsteps = defaults->thsteps;
+		}
+		if(f->thstep < 0){
+			if(defaults->thstep < 0){
+				fprintf(stderr, "Missing default value for thstep - Value \'%d\' will be used\n", DEFAULT_THSTEP);
+				defaults->thstep = DEFAULT_THSTEP;
+			}
+			f->thstep = defaults->thstep;
+		}
+
+		//Create table in db
 		char tmp[STRING_MAX];
-                sprintf(tmp, "ndd%sf%d",t,i);
+		sprintf(tmp, "ndd%sf%d",t,i);
 		if(!ndd_db_create_table(tmp, f->db_columns, f->filter_string)){
 			//Failed to create table
+			fprintf(stderr, "Failed to create table \'%s\', filter will be skipped\n", tmp);
 			ptr_filters[i] = NULL;
 			ndd_free_filter(f, 0);
 			continue;
-                }
-		printf("Table created %s\n", tmp);
+		}
+		printf("Table created \'%s\'\n", tmp);
 		f->db_table = strdup(tmp);
+
+		//Create file for datasets
+		char dataset_path[STRING_MAX];
+		strcpy(dataset_path, "./datasets/");
+		strcat(dataset_path, tmp);
+		strcat(dataset_path, "/");
+		int ret = mkdir(dataset_path, 0777);
+		if(ret == -1){
+			fprintf(stderr, "Failed to create dataset dir for \'%s\', filter will be skipped\n", f->db_table);
+			ptr_filters[i] = NULL;
+			ndd_free_filter(f, 1);
+			continue;
+		}
+		printf("Dataset dir created \'%s\'\n", dataset_path);
 		fc++;
 	}
 	
-	filters = malloc(sizeof(Ndd_filter_t)*fc);
+	filters = malloc(sizeof(Ndd_filter_t *) * fc);
 
-        if(!filters){
-                fprintf(stderr, "Couldn't allocate memory for filters\n");
-                exit(1);
-        }
+	if(!filters){
+		fprintf(stderr, "Couldn't allocate memory for filters\n");
+		exit(1);
+	}
 
 
 	//Fill global filters container

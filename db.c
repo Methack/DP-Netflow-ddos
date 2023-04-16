@@ -240,7 +240,7 @@ int ndd_db_check_and_prepare(){
 	//table 'detected' contains:
 	//	'id' - table name of specific filter
 	//	'time' - timestamp when detection occourred
-	//	'baseline' - current baseline in time of detection
+	//	'basline' - current baseline in time of detection
 	//	'prev_baseline' - previous baseline that is being compared to current one
 	char *sql_d = "CREATE TABLE IF NOT EXISTS detected (id varchar(20), time timestamp, baseline bigint, prev_baseline bigint)";
 	
