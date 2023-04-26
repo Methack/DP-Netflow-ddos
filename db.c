@@ -1,15 +1,4 @@
-#include <libnf.h>
-#include <stdio.h>
-#include <arpa/inet.h>
-#include <libpq-fe.h>
-#include <inttypes.h>
-
-//from nfddos
-#define htonll(x) ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32))
-
-
-#define COMMAND_OK 1
-#define COMMAND_FAIL 0
+#include "db.h"
 
 PGconn *ndd_db_connect(){
         if(!connection_string)
