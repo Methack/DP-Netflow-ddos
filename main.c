@@ -124,7 +124,7 @@ int main(int argc, char **argv){
 	
 	if(daemon){
 		printf("Will daemonize now\n");
-		//print = 0;
+		print = 0;
 		if(!daemonize()){
                 	fprintf(stderr, "Failed to daemonize\n");
                 	return 1;

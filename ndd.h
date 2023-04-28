@@ -45,6 +45,7 @@ typedef struct Ndd_filter {
 typedef struct Ndd_comm{
         //0 - normal | 1 - error
         uint8_t type;
+	int filter_id;
         time_t time;
         char *message;
 

@@ -6,7 +6,12 @@ PGconn *ndd_db_connect(){
 	PGconn *db;
 	db = PQconnectdb(connection_string);
 	if(PQstatus(db) == CONNECTION_BAD){
-                fprintf(stderr, "Failed to connect to db %s", PQerrorMessage(db));
+		if(logging){
+			char msg[STRING_MAX];
+			snprintf(msg, STRING_MAX, "Failed to connect to db | %s", PQerrorMessage(db));
+			ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+		}
+                fprintf(stderr, "Failed to connect to db | %s", PQerrorMessage(db));
                 return NULL;
         }
         return db;
@@ -72,6 +77,14 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	
 	res = PQexecParams(db, sql, (values_count+1), NULL, param_values, param_lengths, param_formats, 0);
 	if(PQresultStatus(res) != PGRES_COMMAND_OK){
+		if(logging){
+			char msg[STRING_MAX];
+			snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+			char num[11];
+			strcpy(num, table+13);
+			ndd_fill_comm(msg, ERROR_MESSAGE, atoi(num)); 
+		}
+		
 		fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
 		PQclear(res);
 		PQfinish(db);
@@ -94,6 +107,11 @@ int ndd_db_exec_sql(char *sql){
         res = PQexec(db, sql);
 
         if(PQresultStatus(res) != PGRES_COMMAND_OK){
+		if(logging){
+			char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed to execute \"%s\" : %s", sql, PQresultErrorMessage(res));
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+		}
                 fprintf(stderr, "Failed to execute \"%s\" : %s", sql, PQresultErrorMessage(res));
                 PQclear(res);
                 PQfinish(db);
@@ -113,6 +131,11 @@ int ndd_db_drop_table(char *table){
 	strcat(sql, table);
 	
 	if(!ndd_db_exec_sql(sql)){
+		if(logging){
+		        char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed drop table %s\n", table);
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+		}
                 fprintf(stderr, "Failed drop table %s\n", table);
                 return COMMAND_FAIL;
         }
@@ -133,6 +156,11 @@ int ndd_db_insert_filters(char *table, char *filter_string){
 
         res = PQexecParams(db, sql, 2, NULL, param_values, NULL, NULL, 0);
         if(PQresultStatus(res) != PGRES_COMMAND_OK){
+		if(logging){
+			char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+		}
                 fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
                 PQclear(res);
                 PQfinish(db);
@@ -171,6 +199,11 @@ int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64
 
 	res = PQexecParams(db, sql, 4, NULL, param_values, param_lengths, param_formats, 0);
 	if(PQresultStatus(res) != PGRES_COMMAND_OK){
+		if(logging){
+                        char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+                }
                 fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
                 PQclear(res);
                 PQfinish(db);
@@ -200,6 +233,11 @@ int ndd_db_create_table(char *table, int v[], char *filter_string){
 
 	//Try to create table for filter
 	if(!ndd_db_exec_sql(sql)){
+		if(logging){
+                        char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed to create table %s\n", table);
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+                }
 		fprintf(stderr, "Failed to create table %s\n", table);
 		return COMMAND_FAIL;
 	}
@@ -210,11 +248,15 @@ int ndd_db_create_table(char *table, int v[], char *filter_string){
 
 	//Failed to insert info into db => delete table created before
 	if(ndd_db_drop_table(table)){
+		if(logging)
+                        ndd_fill_comm("Failed to insert into filters\n", ERROR_MESSAGE, 0);
 		fprintf(stderr, "Failed to insert into filters\n");
 		return COMMAND_FAIL;
 	}
 	
 	//Failed to delete table created before
+	if(logging)
+		ndd_fill_comm("Multiple failures when trying to establish new filter in db\n", ERROR_MESSAGE, 0);
 	fprintf(stderr, "Multiple failures when trying to establish new filter in db\n");
 	return COMMAND_FAIL;
 }

@@ -74,11 +74,11 @@ int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64
         ndd_assemble_filepath(new_path, f->db_table, new_time, time_index);
 
         if(lnf_open(&file, new_path, LNF_WRITE, NULL) != LNF_OK){
-		char str[STRING_MAX*2];
-                sprintf(str, "Failed to open file %s\n", new_path);
+		char msg[STRING_MAX*2];
+                sprintf(msg, "Failed to open file %s\n", new_path);
                 if(logging)
-			ndd_fill_comm(str, ERROR_MESSAGE);
-		fprintf(stderr, "%s", str);
+			ndd_fill_comm(msg, ERROR_MESSAGE, filter_id);
+		fprintf(stderr, "F#%d => %s", filter_id, msg);
 		
 		return -1;
         }
@@ -97,11 +97,11 @@ int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64
                 removed++;
 
                 if(lnf_write(file, rec) != LNF_OK){
-			char str[STRING_MAX];
-                        sprintf(str, "Failed to write record %d\n", removed);
+			char msg[STRING_MAX];
+                        sprintf(msg, "Failed to write record %d\n", removed);
 			if(logging)
-				ndd_fill_comm(str, ERROR_MESSAGE);
-			fprintf(stderr, "%s", str);
+				ndd_fill_comm(msg, ERROR_MESSAGE, filter_id);
+			fprintf(stderr, "F#%d => %s", filter_id, msg);
                 }
         }
 
@@ -164,13 +164,16 @@ void *ndd_process_filter_stream(void *p){
 			values_count++;
 	}
 	uint64_t values_to_insert[values_count];
-
+	
+	//datasets
 	int chunks = 0;
 	uint64_t file_times [f->dataset_chunks];
 	memset(file_times, 0, f->dataset_chunks*sizeof(uint64_t));
 	int time_index = 0;
 	int records_inserted [f->dataset_chunks];
 	
+	//logging
+	char msg[STRING_MAX*2];
 	while(f->stream){
 		//lock stream
 		pthread_mutex_lock(&f->stream_lock);
@@ -245,13 +248,26 @@ void *ndd_process_filter_stream(void *p){
 					f->stream_elements -= removed;
 					pthread_mutex_unlock(&f->stream_lock);
 					
-					char str[STRING_MAX];
-					sprintf(str, "F#%d => New dataset file, records inserted %d, records remaining %d\n", *id, records_inserted[time_index], f->stream_elements);
-					if(logging)
-						ndd_fill_comm(str, NORMAL_MESSAGE);
 					if(print)
-						printf("%s", str);
-					
+						printf("F#%d => New dataset file, records inserted %d, records remaining %d\n", *id, records_inserted[time_index], f->stream_elements);
+					if(logging){
+						if(time_index == 0){
+							char num[10];
+							int total = 0;
+							sprintf(msg, "%d dataset files created |", f->dataset_chunks);
+							for(int i = 0; i < f->dataset_chunks; i++){
+								snprintf(num, 10, "%d", records_inserted[i]);
+								total += records_inserted[i];
+								strcat(msg, num);
+								strcat(msg, "|");
+							}
+							strcat(msg, " Records total = ");
+							snprintf(num, 10, "%d", total);
+							strcat(msg, num);
+							strcat(msg, "\n");
+							ndd_fill_comm(msg, NORMAL_MESSAGE, *id);
+						}
+					}
 					chunks = 0;
 				}
 
@@ -317,7 +333,7 @@ void *ndd_process_filter_stream(void *p){
 					//this file is temporary and this process doesn't free records from memory
 					int asd = ndd_write_to_new_file((*new), *id, 0, 0, 0);
 					if(print)
-						printf("New temp dataset file created with %d - %d remaining\n",asd, f->stream_elements);
+						printf("F#%d => New temp dataset file created with %d - %d remaining\n", *id, asd, f->stream_elements);
 					//try ti find attack pattern in dataset
 					ndd_find_attack_pattern(file_times, f->dataset_chunks, *id, prev_baseline_limit);
 					char temp_file[STRING_MAX];
@@ -350,12 +366,12 @@ void *ndd_process_filter_stream(void *p){
 				}
 				successful_insert++;
 				prev_baseline_limit = bts_baseline * f->max_baseline_increase;
-				char str[STRING_MAX];
-				sprintf(str, "F#%d => inserts %d(failed %d): Threshold %lu\n", (*id), successful_insert, failed_insert, prev_baseline_limit);
-				if(logging)
-					ndd_fill_comm(str, NORMAL_MESSAGE);
+				if(logging){
+					sprintf(msg, "Inserts %d(failed %d): Threshold %lu\n", successful_insert, failed_insert, prev_baseline_limit);
+					ndd_fill_comm(msg, NORMAL_MESSAGE, *id);
+				}
 				if(print)
-					printf("%s", str);
+					printf("F#%d => Inserts %d(failed %d): Threshold %lu\n", *id, successful_insert, failed_insert, prev_baseline_limit);
 				
 				if(stop_number > 0 && successful_insert >= stop_number)
 					stop = 0;
@@ -389,7 +405,7 @@ int ndd_process_file(){
 
         if(lnf_open(&filep, nfcapd_current, LNF_READ | loopread ? LNF_READ_LOOP : 0, NULL) != LNF_OK){
 		fprintf(stderr, "Failed to open file %s\n", nfcapd_current);
-                exit(1);
+		exit(1);
         }
 
         lnf_rec_init(&rec);
@@ -417,16 +433,17 @@ int ndd_process_file(){
 		}
         }
 
-	if(pthread_create(&th[filters_count], NULL, ndd_manage_io, NULL)){
-		fprintf(stderr, "Failed to create thread\n");
+	if(logging){
+		if(pthread_create(&th[filters_count], NULL, ndd_manage_io, NULL)){
+			fprintf(stderr, "Failed to create thread\n");
+		}
 	}
-	
 	while(stop){
                 ret = lnf_read(filep, rec);
 
                 if(ret == LNF_EOF){
 			if(logging)
-				ndd_fill_comm("Found EOF in nfcapd.current\n", ERROR_MESSAGE);
+				ndd_fill_comm("Found EOF in nfcapd.current\n", ERROR_MESSAGE, 0);
 			break;
                 }
 
@@ -455,19 +472,16 @@ int ndd_process_file(){
         }
 	
 	if(logging)
-		ndd_fill_comm("Main done\n", NORMAL_MESSAGE);
+		ndd_fill_comm("Main done\n", NORMAL_MESSAGE, 0);
 	if(print)
 		printf("Main done\n");
 	
 	for(int j = 1; j < filters_count; j++){
-		char str[STRING_MAX];
-		sprintf(str, "F#%d done\n", j);
-		
 		if(logging)
-			ndd_fill_comm(str, NORMAL_MESSAGE);
+			ndd_fill_comm("Done\n", NORMAL_MESSAGE, j);
 		
 		if(print)
-			printf("%s", str);
+			printf("F#%d => Done\n", j);
 		
 		filters[j]->stream = NULL;
 		ndd_clear_old_rec(&first[j], 999999999999);
@@ -476,9 +490,11 @@ int ndd_process_file(){
 	comm_stop = 0;
 
 	for(int i = 1; i <= filters_count; i++){
+		if(i == filters_count && !logging)
+			break;
 		if(pthread_join(th[i], NULL)){
 			if(logging)
-				ndd_fill_comm("Error joining threads\n", ERROR_MESSAGE);
+				ndd_fill_comm("Error joining threads\n", ERROR_MESSAGE, 0);
                 	fprintf(stderr, "Error joining threads\n");
         	}
 	}
@@ -546,7 +562,8 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 	lnf_rec_init(&rec);
 	lnf_mem_init(&mem_original_dataset);
 
-	
+	char msg[STRING_MAX*2];
+
 	// --- 1 ---
 	//original dataset memory configuration
 	lnf_mem_fadd(mem_original_dataset, LNF_FLD_SRCADDR, LNF_AGGR_KEY, 32, 128);
@@ -560,6 +577,13 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 	lnf_mem_fadd(mem_original_dataset, LNF_FLD_FIRST, LNF_AGGR_MIN, 0, 0);
 	lnf_mem_fadd(mem_original_dataset, LNF_FLD_LAST, LNF_AGGR_MAX, 0, 0);
 
+	
+	if(logging)
+		ndd_fill_comm("!!! Entering attack pattern finding !!!\n", NORMAL_MESSAGE, filter_id);
+	if(print)
+		printf("F#%d => !!! Entering attack pattern finding !!!\n", filter_id);
+
+
 	//read whole dataset
 	for(int i = -1; i < file_count; i++){
 		lnf_file_t *file;
@@ -571,7 +595,11 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			ndd_assemble_filepath(path, f->db_table, 0, 0);
 
 		if(lnf_open(&file, path, LNF_READ, NULL) != LNF_OK){
-			fprintf(stderr, "Failed to open dataset file %s\n", path);
+			if(logging){
+				sprintf(msg, "Failed to open dataset file %s\n", path);
+				ndd_fill_comm(msg, ERROR_MESSAGE, filter_id);
+			}
+			fprintf(stderr, "F#%d => Failed to open dataset file %s\n", filter_id, path);
 			return -1;
 		}
 
@@ -584,8 +612,12 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 
 		lnf_close(file);	
 	}
+	if(logging){
+                sprintf(msg, "!!! Found %d (%d in tmp) records in %d files !!!\n", records, temp, file_count);
+                ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+        }
 	if(print)
-		printf("!! F#%d => Found %d (%d in tmp) records in %d files\n", filter_id, records, temp, file_count);
+		printf("F#%d => !!! Found %d (%d in tmp) records in %d files !!!\n", filter_id, records, temp, file_count);
 
 	// --- 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 ---
 	while(1){
@@ -667,8 +699,10 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			dataset_baseline = dataset_baseline / f->dataset_window;
 			//--- 2 ---
 			if(dataset_baseline <= threshold){
+				if(logging)
+	                		ndd_fill_comm("!!! Ending pattern finding: current < threshold !!!\n", NORMAL_MESSAGE, filter_id);
 				if(print)
-					printf("!! F#%d => ending pattern finding: current < threshold\n", filter_id);
+					printf("F#%d => !!! Ending pattern finding: current < threshold !!!\n", filter_id);
 				//EXIT + free everything
 				lnf_rec_free(rec);
 				lnf_mem_free(mem_original_dataset);
@@ -680,8 +714,15 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			lnf_brec1_t brec;
 			uint8_t tcp_flags = 0;
 			lnf_mem_first_c(mem_altered_dataset, &csr);
-			printf("Dataset filtered with %d aggr_filters (%d active_filters -> filtered %d records) and aggr based on %s (threshold %lu) | TOP 3 :\n", aggr_filters_count, active_filters_count, active_reject, items_text[f->eval_items[i]], threshold2);
-			
+			if(logging){
+                                sprintf(msg, "Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records | aggregated based on %s | threshold2 %lu\n",
+					aggr_filters_count, active_filters_count, active_reject, items_text[f->eval_items[i]], threshold2);
+	                        ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+                        }
+			if(print){
+				printf("F#%d => Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records | aggregated based on %s | threshold2 %lu\n",
+					filter_id, aggr_filters_count, active_filters_count, active_reject, items_text[f->eval_items[i]], threshold2);
+			}
 			uint64_t first;
 			uint64_t last;
 			uint64_t top_current = 0;
@@ -701,8 +742,25 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 					uint64_t duration = (last - first) / 1000;
                                         duration = duration > 0 ? duration : 1;
                                         top_current = top_current / duration;
+					
+					char sbuf[INET6_ADDRSTRLEN];
+                                        char dbuf[INET6_ADDRSTRLEN];
 
-					printf("Top1_current %lu vs threshold2 %lu", top_current, threshold2);
+                                        lnf_rec_fget(rec, LNF_FLD_BREC1, &brec);
+                                        lnf_rec_fget(rec, LNF_FLD_TCP_FLAGS, &tcp_flags);
+                                        inet_ntop(AF_INET6, &brec.srcaddr, sbuf, INET6_ADDRSTRLEN);
+                                        inet_ntop(AF_INET6, &brec.dstaddr, dbuf, INET6_ADDRSTRLEN);
+
+                                        if(logging){
+                                                snprintf(msg, STRING_MAX, "(%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %luB/s\n",
+							(records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current);
+                                                ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+                                        }
+                                        if(print){
+                                                printf("F#%d => (%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %luB/s\n",
+                                                        filter_id, (records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current);
+					}
+
 					//--- 6 ---
 					if(top_current > threshold2) {
 						//add to filter_candidate + make aggr_filter
@@ -782,42 +840,25 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 						}
 						filter_candidate[index]++;
 					}
-				}			
-
-				if(records == 0){
-					lnf_rec_fget(rec, LNF_FLD_FIRST, &first);
-					lnf_rec_fget(rec, LNF_FLD_LAST, &last);
-					lnf_rec_fget(rec, LNF_FLD_DOCTETS, &top_current);
-
-
-					uint64_t duration = (last - first) / 1000;
-					duration = duration > 0 ? duration : 1;
-					top_current = top_current / duration;
-					printf("top current %lu while threshold being %lu\n", top_current, threshold);
-				}
-
-				lnf_rec_fget(rec, LNF_FLD_BREC1, &brec);
-				
-				dataset_baseline += brec.bytes;
-
-				if(records < 3){
-					char sbuf[INET6_ADDRSTRLEN];
-					char dbuf[INET6_ADDRSTRLEN];
-
-					//lnf_rec_fget(rec, LNF_FLD_BREC1, &brec);
-					lnf_rec_fget(rec, LNF_FLD_TCP_FLAGS, &tcp_flags);
-
-					inet_ntop(AF_INET6, &brec.srcaddr, sbuf, INET6_ADDRSTRLEN);
-					inet_ntop(AF_INET6, &brec.dstaddr, dbuf, INET6_ADDRSTRLEN);
-
-					printf("%s - %d | %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d\n", sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags);
 				}
 				records++;
 				lnf_mem_next_c(mem_altered_dataset, &csr);
 			}
 
-			if(index){			
-				printf("Filter_candidate %d - %s\n", index, filter_candidate_text[index]);
+			if(logging){
+                        	sprintf(msg, "Reducted to %d records\n", records);
+                                ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+			}
+			if(print)
+				printf("F#%d => Reducted to %d records\n", filter_id, records);
+
+			if(index){
+				if(logging){
+                	                sprintf(msg, "Added filter_candidate %d - %s\n", index, filter_candidate_text[index]);
+        	                        ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+	                        }
+				if(print)
+					printf("F#%d => Added filter_candidate %d - %s\n", filter_id, index, filter_candidate_text[index]);
 				if(filter_candidate[index] > 1){
 					char filter_text[STRING_MAX];
 					strcpy(filter_text, "(");
@@ -829,16 +870,16 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 				int con;
                                 lnf_filter_t *flt;
                                 if((con = lnf_filter_init_v1(&flt, filter_candidate_text[index])) != LNF_OK){
-                                        fprintf(stderr, "Failed to initialise libnf filter (%d): \"%s\"\n", con, filter_candidate_text[index]);
+					if(logging){
+                                        	sprintf(msg, "Failed to initialise libnf filter (%d): \"%s\"\n", con, filter_candidate_text[index]);
+                                        	ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+					}
+                                        fprintf(stderr, "F#%d => Failed to initialise libnf filter (%d): \"%s\"\n", filter_id, con, filter_candidate_text[index]);
                                 }else{
-	                                printf("Aggr filter %s initialized\n", filter_candidate_text[index]);
 					aggr_filters[aggr_filters_count] = flt;
                                 	aggr_filters_count++;
                                 }
 			}
-
-			printf("Records reduced to %d - baseline %lu (%lu)\n", records, (dataset_baseline/f->dataset_window), threshold);
-                        printf("########################\n");
 
 			lnf_mem_free(mem_altered_dataset);
 		}
@@ -850,7 +891,6 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 		* */
 
 		for(int i = 0; i < aggr_filters_count; i++){
-			printf("Freeing filter %d \n", i);
 			lnf_filter_free(aggr_filters[i]);
 		}
 
@@ -877,40 +917,68 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			required_items_counted++;
 		}
 
-		printf("Required_items (%d) - matching_filter_candidate (%d)\n", required_items_counted, matching_filter_candidates_counted);
-		printf("Found pattern : %s\n", found_pattern);
+		if(logging){
+                        sprintf(msg, "Filter_candidate contains %d items from Required_items (%d needed)\n", matching_filter_candidates_counted, required_items_counted);
+	                ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+			sprintf(msg, "Found pattern : %s\n", found_pattern);
+			ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+                }
+
+		if(print){
+			printf("F#%d => Filter_candidate contains %d items from Required_items (%d needed)\n", filter_id, matching_filter_candidates_counted, required_items_counted);
+			printf("F#%d => Found pattern : %s\n", filter_id, found_pattern);
+		}
 
 		if(required_items_counted == matching_filter_candidates_counted){
 			//--- 10 ---
 			int con;
                         lnf_filter_t *flt;
                         if((con = lnf_filter_init_v1(&flt, found_pattern)) != LNF_OK){
-                        	fprintf(stderr, "Failed to initialise libnf filter (%d): \"%s\"\n", con, found_pattern);
+				if(logging){
+					sprintf(msg, "Failed to initialise libnf filter (%d): \"%s\"\n", con, found_pattern);
+					ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+				}
+                        	fprintf(stderr, "F#%d => Failed to initialise libnf filter (%d): \"%s\"\n", filter_id, con, found_pattern);
                         	continue;
                         }else{
-                        	printf("Filter %s (%p) initialized and added to active_filters \n", found_pattern, flt);
+				if(logging){
+                                        sprintf(msg, "Filter \"%s\" (%p) initialized and added to active_filters \n", found_pattern, flt);
+                                        ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+                                }
+				if(print)
+                        		printf("F#%d => Filter \"%s\" (%p) initialized and added to active_filters \n", filter_id, found_pattern, flt);
                         }
 			ndd_add_active_filter(flt);
 			threshold2 = threshold;
+			if(logging){
+				sprintf(msg, "Threshold2 reseting to %lu\n", threshold2);
+				ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+			}
+			if(print)
+				printf("F#%d => Threshold2 reseting to %lu\n", filter_id, threshold2);
 		}else{
 			//--- 11 ---
 			thstep--;
 			//--- 12 ---
 			if(thstep == 0){
-				printf("thstep => 0, no pattern found\n");
+				if(logging)
+					ndd_fill_comm("!!! Ending pattern finding: thstep -> 0 !!!\n", NORMAL_MESSAGE, filter_id);
+				if(print)
+					printf("F#%d => !!! Ending pattern finding: thstep -> 0 !!!\n", filter_id);
 				break;
 			}
 			threshold2 = (threshold / f->thsteps) * thstep;
-			printf("threshold2 getting lowered to %lu\n", threshold2);
+			if(logging){
+				sprintf(msg, "Threshold2 getting lowered to %lu\n", threshold2);
+				ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+			}
+			if(print)
+				printf("F#%d => Threshold2 getting lowered to %lu\n", filter_id, threshold2);
 		}
 	}
 
-	// kontrola jestli je potřeba ještě něco freeovat
-
 	lnf_rec_free(rec);
 	lnf_mem_free(mem_original_dataset);
-	printf("Found %d records in %d files\n", records, file_count);
-
 	return records;
 }
 

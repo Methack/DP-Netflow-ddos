@@ -1,4 +1,3 @@
-
 #include "comm.h"
 
 void ndd_init_comm(ndd_comm_t **c){
@@ -6,6 +5,7 @@ void ndd_init_comm(ndd_comm_t **c){
 	if(m){
 		(*c) = m;
 		(*c)->type = -1;
+		(*c)->filter_id = 0;
 		(*c)->message = NULL;
 		(*c)->next = NULL;
 		if(comm_bot == NULL){
@@ -27,7 +27,7 @@ void ndd_clear_comm(ndd_comm_t *c){
 		comm_top = NULL;
 }
 
-void ndd_fill_comm(char *string, int type){
+void ndd_fill_comm(char *string, int type, int filter_id){
 	ndd_comm_t *c = NULL;
 
 	pthread_mutex_lock(&comm_lock);
@@ -36,7 +36,8 @@ void ndd_fill_comm(char *string, int type){
 	c->message = strdup(string);
 	c->type = type;
 	c->time = time(NULL);
-        pthread_mutex_unlock(&comm_lock);
+	c->filter_id = filter_id;
+	pthread_mutex_unlock(&comm_lock);
 }
 
 
@@ -60,9 +61,9 @@ void *ndd_manage_io(){
 
 	char str[STRING_MAX];
         strcpy(str, "######------------------######\n      New run ");
-        char t[11];
-	strncpy(t, filters[1]->db_table + 3, 10);
-	strcat(str, t);
+        char run[11];
+	strncpy(run, filters[1]->db_table + 3, 10);
+	strcat(str, run);
 	strcat(str, "\n");
 
 	fprintf(normal, "%s", str);
@@ -78,19 +79,22 @@ void *ndd_manage_io(){
 			if(comm_bot == comm_top)
 				pthread_mutex_lock(&comm_lock);
 
-			char tstr[23];
+			char tstr[20];
 			strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&comm_bot->time));
-			strcat(tstr, " | ");
 
 			//check for message type
 			if(comm_bot->type == ERROR_MESSAGE){
-				fprintf(err, tstr);	
-				fprintf(err, comm_bot->message);
+				if(comm_bot->filter_id > 0)	
+					fprintf(err, "%s | F#%d => %s", tstr, comm_bot->filter_id, comm_bot->message);
+				else
+					fprintf(err, "%s | %s", tstr, comm_bot->message);
 				err_written++;
 			}
 			//error messages are written into normal log and error log
-			fprintf(normal, tstr);
-			fprintf(normal, comm_bot->message);
+			if(comm_bot->filter_id > 0)
+				fprintf(normal, "%s | F#%d => %s", tstr, comm_bot->filter_id, comm_bot->message);
+			else
+				fprintf(normal, "%s | %s", tstr, comm_bot->message);
 			ndd_clear_comm(comm_bot);
 			
 			//finished writing every comm message
@@ -129,11 +133,10 @@ void *ndd_manage_io(){
 
 
         time_t tm = time(NULL);
-	char tstr[23];
+	char tstr[20];
         strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&tm));
-        strcat(tstr, " | ");
 	
-	fprintf(normal, "%sIO end\n", tstr);
+	fprintf(normal, "%s | IO end\n", tstr);
 	fflush(normal);
 
 	if(print)
