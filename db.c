@@ -79,13 +79,13 @@ int ndd_db_insert(uint64_t time, uint64_t values[], char *table, int columns[]){
 	if(PQresultStatus(res) != PGRES_COMMAND_OK){
 		if(logging){
 			char msg[STRING_MAX];
-			snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+			snprintf(msg, STRING_MAX, "Failed to insert baseline: %s", PQresultErrorMessage(res));
 			char num[11];
 			strcpy(num, table+13);
 			ndd_fill_comm(msg, ERROR_MESSAGE, atoi(num)); 
 		}
 		
-		fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
+		fprintf(stderr, "Failed to insert baseline: %s", PQresultErrorMessage(res));
 		PQclear(res);
 		PQfinish(db);
 		return COMMAND_FAIL;
@@ -158,10 +158,10 @@ int ndd_db_insert_filters(char *table, char *filter_string){
         if(PQresultStatus(res) != PGRES_COMMAND_OK){
 		if(logging){
 			char msg[STRING_MAX];
-                        snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+                        snprintf(msg, STRING_MAX, "Failed to insert filter info: %s", PQresultErrorMessage(res));
                         ndd_fill_comm(msg, ERROR_MESSAGE, 0);
 		}
-                fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
+                fprintf(stderr, "Failed to insert filter info: %s", PQresultErrorMessage(res));
                 PQclear(res);
                 PQfinish(db);
                 return COMMAND_FAIL;
@@ -201,15 +201,52 @@ int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64
 	if(PQresultStatus(res) != PGRES_COMMAND_OK){
 		if(logging){
                         char msg[STRING_MAX];
-                        snprintf(msg, STRING_MAX, "Failed to insert: %s", PQresultErrorMessage(res));
+                        snprintf(msg, STRING_MAX, "Failed to insert detection: %s", PQresultErrorMessage(res));
                         ndd_fill_comm(msg, ERROR_MESSAGE, 0);
                 }
-                fprintf(stderr, "Failed to insert: %s", PQresultErrorMessage(res));
+                fprintf(stderr, "Failed to insert detection: %s", PQresultErrorMessage(res));
                 PQclear(res);
                 PQfinish(db);
                 return COMMAND_FAIL;
         }
 	PQclear(res);
+        PQfinish(db);
+
+        return COMMAND_OK;
+}
+
+int ndd_db_insert_active_filter(char *table, char *filter_string, uint64_t start, uint64_t end){
+	PGconn *db;
+	PGresult *res;
+
+	if(!(db = ndd_db_connect())){
+                return COMMAND_FAIL;
+        }
+
+	char *sql = "INSERT INTO active_filters (id, filter, start, stop) VALUES ($1, $2, to_timestamp($3), to_timestamp($4))";
+
+	char start_timestamp[11];
+	snprintf(start_timestamp, 11, "%"PRIu64, start);
+	char end_timestamp[11];
+	snprintf(end_timestamp, 11, "%"PRIu64, end);
+
+	const char * const param_values[] = {table, filter_string, start_timestamp, end_timestamp};
+	const int param_formats[] = {1,1,0,0};
+	const int param_lengths[] = {strlen(table), strlen(filter_string), 11, 11};
+
+	res = PQexecParams(db, sql, 4, NULL, param_values, param_lengths, param_formats, 0);
+	if(PQresultStatus(res) != PGRES_COMMAND_OK){
+                if(logging){
+                        char msg[STRING_MAX];
+                        snprintf(msg, STRING_MAX, "Failed to insert active_filter: %s", PQresultErrorMessage(res));
+                        ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+                }
+                fprintf(stderr, "Failed to insert active_filter: %s", PQresultErrorMessage(res));
+                PQclear(res);
+                PQfinish(db);
+                return COMMAND_FAIL;
+        }
+        PQclear(res);
         PQfinish(db);
 
         return COMMAND_OK;
@@ -275,15 +312,24 @@ int ndd_db_check_and_prepare(){
 	//	'prev_baseline' - previous baseline that is being compared to current one
 	char *sql_d = "CREATE TABLE IF NOT EXISTS detected (id varchar(20), time timestamp, baseline bigint, prev_baseline bigint)";
 	
+	//table 'active_filters' contains:
+	//	'id' - table name of specificfilter
+	//	'filter' - filter string of found pattern
+	//	'start' - time of filter start
+	//	'stop' - time of filter end
+	char *sql_a = "CREATE TABLE IF NOT EXISTS active_filters (id varchar(20), filter text, start timestamp, stop timestamp)";
+	
 	//try to create table for filters
-	if(!ndd_db_exec_sql(sql_f)){
+	if(!ndd_db_exec_sql(sql_f))
 		return COMMAND_FAIL;
-	}
 
 	//try to create table for detected
-	if(!ndd_db_exec_sql(sql_d)){
+	if(!ndd_db_exec_sql(sql_d))
 		return COMMAND_FAIL;
-	}
+
+	//try to create table for active_filters
+	if(!ndd_db_exec_sql(sql_a))
+		return COMMAND_FAIL;
 
 	//successfully created both tables
 	return COMMAND_OK;

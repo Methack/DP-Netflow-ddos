@@ -1,47 +1,5 @@
 #include "comm.h"
 
-void ndd_init_comm(ndd_comm_t **c){
-	ndd_comm_t *m = malloc(sizeof(ndd_comm_t));
-	if(m){
-		(*c) = m;
-		(*c)->type = -1;
-		(*c)->filter_id = 0;
-		(*c)->message = NULL;
-		(*c)->next = NULL;
-		if(comm_bot == NULL){
-			comm_bot = (*c);
-			comm_top = (*c);
-		}else{
-			comm_top->next = (*c);
-			comm_top = (*c);
-		}
-	}
-}
-
-void ndd_clear_comm(ndd_comm_t *c){
-	if(comm_bot == c)
-		comm_bot = c->next;
-	free(c->message);
-	free(c);
-	if(comm_bot == NULL)
-		comm_top = NULL;
-}
-
-void ndd_fill_comm(char *string, int type, int filter_id){
-	ndd_comm_t *c = NULL;
-
-	pthread_mutex_lock(&comm_lock);
-	ndd_init_comm(&c);
-
-	c->message = strdup(string);
-	c->type = type;
-	c->time = time(NULL);
-	c->filter_id = filter_id;
-	pthread_mutex_unlock(&comm_lock);
-}
-
-
-
 void *ndd_manage_io(){
 	//Failed to create logs dir, abort
         if(mkdir("./logs/", 0777) && errno != EEXIST){
@@ -57,8 +15,6 @@ void *ndd_manage_io(){
 	int normal_written = 0;
 	int err_written = 0;
 
-	int write_stats = 1;
-
 	char str[STRING_MAX];
         strcpy(str, "######------------------######\n      New run ");
         char run[11];
@@ -70,6 +26,8 @@ void *ndd_manage_io(){
 	fflush(normal);
 	fprintf(err, "%s", str);
 	fflush(err);
+
+	int time_since_last_stats = 0;
 
 	while(comm_stop){
 		sleep(1);
@@ -95,7 +53,7 @@ void *ndd_manage_io(){
 				fprintf(normal, "%s | F#%d => %s", tstr, comm_bot->filter_id, comm_bot->message);
 			else
 				fprintf(normal, "%s | %s", tstr, comm_bot->message);
-			ndd_clear_comm(comm_bot);
+			ndd_free_comm(comm_bot);
 			
 			//finished writing every comm message
 			if(comm_bot == NULL)
@@ -105,16 +63,21 @@ void *ndd_manage_io(){
 		}
 
 
+		time_since_last_stats++;
+		if(time_since_last_stats >= 300)
+			write_stats = 1;
 		//Write current state of filters into stats file
 		if(write_stats){
 			stats = fopen("./logs/ndd.stats", "w");
 			if(stats){
+				time_since_last_stats = 0;
 				time_t stat_time = time(NULL);
 				fprintf(stats, "Current filter stats - %s", asctime(localtime(&stat_time)));
 				write_stats = 0;
 				for(int i = 0; i < filters_count; i++){
 					ndd_print_filter_info(filters[i], i, stats, 'f');
 				}
+				ndd_print_active_filters(stats);
 				fflush(stats);
 				fclose(stats);
 			}

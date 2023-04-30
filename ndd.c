@@ -1,43 +1,4 @@
-
 #include "ndd.h"
-#include "db.h"
-#include "comm.h"
-
-
-void ndd_init_rec(ndd_rec_t **rec, ndd_rec_t *last){
-	ndd_rec_t *r = malloc(sizeof(ndd_rec_t));
-        if(r){
-		memset(&r->brec, 0, sizeof(lnf_brec1_t));
-
-		r->tcp_flags = 0;
-                r->processed = 0;
-		r->next = NULL;
-		r->prev = NULL;
-                if(last){
-                        last->next = r;
-			r->prev = last;
-		}
-
-                *rec = r;
-        }
-}
-
-int ndd_clear_old_rec(ndd_rec_t **r, uint64_t cutoff){
-	int removed = 0;
-	ndd_rec_t *tmp;
-
-	while((*r)->brec.first < cutoff){
-		tmp = (*r);
-		if(!(*r)->next)
-			(*r) = NULL;
-		else
-			(*r) = (*r)->next;
-		free(tmp);
-		removed++;
-	}
-
-	return removed;
-}
 
 void ndd_assemble_filepath(char path[], char *filter_name, uint64_t time, int time_index){
         char file_time[11];
@@ -171,7 +132,7 @@ void *ndd_process_filter_stream(void *p){
 	memset(file_times, 0, f->dataset_chunks*sizeof(uint64_t));
 	int time_index = 0;
 	int records_inserted [f->dataset_chunks];
-	
+
 	//logging
 	char msg[STRING_MAX*2];
 	while(f->stream){
@@ -247,7 +208,7 @@ void *ndd_process_filter_stream(void *p){
 					pthread_mutex_lock(&f->stream_lock);
 					f->stream_elements -= removed;
 					pthread_mutex_unlock(&f->stream_lock);
-					
+
 					if(print)
 						printf("F#%d => New dataset file, records inserted %d, records remaining %d\n", *id, records_inserted[time_index], f->stream_elements);
 					if(logging){
@@ -321,26 +282,22 @@ void *ndd_process_filter_stream(void *p){
 
 
 		//check for substantial increase in baseline
-		if(window_filled){
-			if(bts_baseline > prev_baseline_limit){
-				if(increase_insert && chunks == 4){
-					uint64_t prev_baseline = prev_baseline_limit / f->max_baseline_increase;
-					if(ndd_db_insert_detection(f->db_table, newest, bts_baseline, prev_baseline)){
-						//substantial increase detected => information inserted into db	
-						increase_insert = 0;
-					}
-					//before finding pattern create new dataset file with all processed records in memory
-					//this file is temporary and this process doesn't free records from memory
-					int asd = ndd_write_to_new_file((*new), *id, 0, 0, 0);
-					if(print)
-						printf("F#%d => New temp dataset file created with %d - %d remaining\n", *id, asd, f->stream_elements);
-					//try ti find attack pattern in dataset
-					ndd_find_attack_pattern(file_times, f->dataset_chunks, *id, prev_baseline_limit);
-					char temp_file[STRING_MAX];
-					ndd_assemble_filepath(temp_file, f->db_table, 0, 0);
-					remove(temp_file);
-				}
+		if(window_filled && (bts_baseline > prev_baseline_limit) && increase_insert){
+			uint64_t prev_baseline = prev_baseline_limit / f->max_baseline_increase;
+			if(ndd_db_insert_detection(f->db_table, newest, bts_baseline, prev_baseline)){
+				//substantial increase detected => information inserted into db	
+				increase_insert = 0;
 			}
+			//before finding pattern create new dataset file with all processed records in memory
+			//this file is temporary and this process doesn't free records from memory
+			int asd = ndd_write_to_new_file((*new), *id, 0, 0, 0);
+			if(print)
+				printf("F#%d => New temp dataset file created with %d - %d remaining\n", *id, asd, f->stream_elements);
+			//try ti find attack pattern in dataset
+			ndd_find_attack_pattern(file_times, f->dataset_chunks, *id, prev_baseline_limit);
+			char temp_file[STRING_MAX];
+			ndd_assemble_filepath(temp_file, f->db_table, 0, 0);
+			remove(temp_file);
 		}
 
                 if(sec_prev_insert >= f->db_insert_interval){
@@ -525,30 +482,6 @@ void ndd_tcp_flags_decode(char on[], char off[], uint8_t flags, int *on_count){
 	
 }
 
-int ndd_add_active_filter(lnf_filter_t *f){
-	pthread_mutex_lock(&active_filters_lock);
-	if(active_filters_allocated < (active_filters_count+1)){
-		lnf_filter_t **tmp;
-		lnf_filter_t **tmp2;
-		tmp = malloc(sizeof(lnf_filter_t *) * (active_filters_allocated + 10));
-		for(int i = 0; i < active_filters_count; i++){
-			tmp[i] = active_filters[i];
-		}	
-		tmp2 = active_filters;
-		active_filters = tmp;
-		free(tmp2);
-
-		active_filters_allocated += 10;
-		active_filters[active_filters_count] = f;
-		active_filters_count++;
-	}else{
-		active_filters[active_filters_count] = f;
-		active_filters_count++;
-	}	
-	pthread_mutex_unlock(&active_filters_lock);
-	return 0;
-}
-
 int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id, uint64_t threshold){
 	lnf_rec_t *rec;
 	ndd_filter_t *f = filters[filter_id];
@@ -579,7 +512,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 
 	
 	if(logging)
-		ndd_fill_comm("!!! Entering attack pattern finding !!!\n", NORMAL_MESSAGE, filter_id);
+		ndd_fill_comm("!!! Entering attack pattern finding !!!\n", ERROR_MESSAGE, filter_id);
 	if(print)
 		printf("F#%d => !!! Entering attack pattern finding !!!\n", filter_id);
 
@@ -623,12 +556,9 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 	while(1){
 		//get active filters
         	pthread_mutex_lock(&active_filters_lock);
-        	int act_filters_count = active_filters_count;
-        	lnf_filter_t *act_filters[act_filters_count];
-		for(int i = 0; i < act_filters_count; i++){
-                	act_filters[i] = active_filters[i];
-        	}
-        	pthread_mutex_unlock(&active_filters_lock);
+        	lnf_filter_t *act_filters[active_filters_count];
+        	int act_filters_count = ndd_get_active_filters(act_filters);
+		pthread_mutex_unlock(&active_filters_lock);
 		
 		int aggr_filters_count = 0;
         	int filter_candidate[items_count];
@@ -948,7 +878,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 				if(print)
                         		printf("F#%d => Filter \"%s\" (%p) initialized and added to active_filters \n", filter_id, found_pattern, flt);
                         }
-			ndd_add_active_filter(flt);
+			ndd_add_active_filter(flt, found_pattern, 30, f->db_table);
 			threshold2 = threshold;
 			if(logging){
 				sprintf(msg, "Threshold2 reseting to %lu\n", threshold2);

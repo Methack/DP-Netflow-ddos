@@ -41,30 +41,29 @@ char *nfcapd_current;
 int filters_count = 0;
 
 int active_filters_count = 0;
-int active_filters_allocated = 0;
 pthread_mutex_t active_filters_lock;
-lnf_filter_t **active_filters;
-char **active_filters_text;
 
 pthread_mutex_t comm_lock;
 
 int stop = 1;
 int comm_stop = 1;
+int write_stats = 1;
 int stop_number = 0;
 
 int print = 0;
 int logging = 0;
 
-#include "ndd.h"
+#include "nddstruct.h"
 
 ndd_filter_t **filters;
 ndd_comm_t *comm_top = NULL;
 ndd_comm_t *comm_bot = NULL;
+ndd_activef_t *active_filters;
 
-
-#include "comm.h"
 #include "db.h"
+#include "comm.h"
 #include "config.h"
+#include "ndd.h"
 
 
 int main(int argc, char **argv){
@@ -142,7 +141,7 @@ int main(int argc, char **argv){
                 ndd_free_filter(filters[i], delete);
         }
 	for(int i = 0; i < active_filters_count; i++){
-		lnf_filter_free(active_filters[i]);
+		ndd_free_activef(active_filters);
 	}
 
         free(filters);
