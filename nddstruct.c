@@ -26,6 +26,7 @@ void ndd_init_filter(ndd_filter_t **f, char *fs, char *t){
                 p->coefficient = -1;
                 p->db_insert_interval = -1;
                 p->max_baseline_increase = -1;
+		p->active_filter_duration = -1;
                 memset(p->db_columns, 0, col_count*sizeof(int));
                 *f = p;
         }
@@ -90,12 +91,13 @@ void ndd_print_filter_info(ndd_filter_t *f, int i, FILE *stream, char dest){
                                 fprintf(stream, "%s ", items_text[f->eval_items[i]]);
                 }
                 fprintf(stream, "\n");
-                fprintf(stream, "         Required_items : ");
+                fprintf(stream, "        Required_items : ");
                 for(int i = 0; i < items_count; i++){
                         if(f->required_items[i] > 0)
                                 fprintf(stream, "%s ", items_text[f->required_items[i]]);
                 }
-                fprintf(stream, "\n");
+		fprintf(stream, "\n");
+		fprintf(stream, "	Active_filter_duration - %d\n", f->active_filter_duration);
         }
 }
 

@@ -49,7 +49,7 @@ int stop = 1;
 int comm_stop = 1;
 int write_stats = 1;
 int stop_number = 0;
-
+int loop_read = 1;
 int print = 0;
 int logging = 0;
 
@@ -70,7 +70,7 @@ int main(int argc, char **argv){
 	int daemon = 0;
 	int delete = 0;
 	int c;
-	while((c = getopt(argc, argv, "pdlts:")) != -1){
+	while((c = getopt(argc, argv, "pdltrs:")) != -1){
 		switch(c){
 			case 'd' : {
 				daemon = 1;
@@ -92,13 +92,18 @@ int main(int argc, char **argv){
 				logging = 1;
 		    		break;		
 			}
+			case 'r' : {
+				loop_read = 0;
+				break;
+			}
 			case '?' : {
-				printf("Usage: %s [ -a ] [ -p ] [ -d ] [ -s <number>]\n", argv[0]);
+				printf("Usage: %s [ -a ] [ -p ] [ -d ] [ -r ][ -s <number>]\n", argv[0]);
 				printf(" -d : Daemonize program\n");
 				printf(" -p : Print additional information\n");
-				printf(" -t : drop filter Tables after finishing\n");
-				printf(" -l : log into log files\n");
-				printf(" -s <n> : will Stop program after <n> db inserts\n");
+				printf(" -t : Drop filter Tables after finishing\n");
+				printf(" -l : Log into log files\n");
+				printf(" -r : Read file not current\n");
+				printf(" -s <n> : Will Stop program after <n> db inserts\n");
 				return 1;
 			}
 		
@@ -110,6 +115,8 @@ int main(int argc, char **argv){
 
 	if(stop_number){
 		printf("Will stop after %d db inserts\n", stop_number);
+	}else if(!loop_read){
+		printf("Will run until end of file\n");
 	}else{
 		printf("Will run indefinitely\n");
 	}

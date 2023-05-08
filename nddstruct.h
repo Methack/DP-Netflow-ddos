@@ -39,6 +39,7 @@ typedef struct Ndd_filter {
         int required_items[7];
         int thstep;
         int thsteps;
+	int active_filter_duration;
         int max_baseline_increase;
         int max_newest_cutoff;
         int coefficient;

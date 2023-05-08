@@ -173,7 +173,7 @@ int ndd_db_insert_filters(char *table, char *filter_string){
         return COMMAND_OK;
 }
 
-int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64_t prev){
+int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64_t prev, char type){
 	PGconn *db;
 	PGresult *res;
 
@@ -181,7 +181,7 @@ int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64
                 return COMMAND_FAIL;
         }
 
-	char *sql = "INSERT INTO detected (id, time, baseline, prev_baseline) VALUES ($1, to_timestamp($2), $3, $4)";
+	char *sql = "INSERT INTO detected (id, time, baseline, prev_baseline, type) VALUES ($1, to_timestamp($2), $3, $4, $5)";
 
 	//transform timestamp into pg friendly format
 	char timestamp[11];
@@ -191,13 +191,19 @@ int ndd_db_insert_detection(char *table, uint64_t time, uint64_t current, uint64
 	uint64_t c = htonll(current);
 	uint64_t p = htonll(prev);
 
-	const char * const param_values[] = {table, timestamp, (char *)&c, (char *)&p};
-	const int param_formats[] = {1,0,1,1};
-	const int param_lengths[] = {strlen(table), 11, sizeof(uint64_t), sizeof(uint64_t)};
+	char *unit;
+	if(type == 'B')
+		unit = "byte";
+	else
+		unit = "packet";
+
+	const char * const param_values[] = {table, timestamp, (char *)&c, (char *)&p, unit};
+	const int param_formats[] = {1,0,1,1,1};
+	const int param_lengths[] = {strlen(table), 11, sizeof(uint64_t), sizeof(uint64_t), strlen(unit)};
 
 	
 
-	res = PQexecParams(db, sql, 4, NULL, param_values, param_lengths, param_formats, 0);
+	res = PQexecParams(db, sql, 5, NULL, param_values, param_lengths, param_formats, 0);
 	if(PQresultStatus(res) != PGRES_COMMAND_OK){
 		if(logging){
                         char msg[STRING_MAX];

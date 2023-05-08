@@ -20,6 +20,7 @@ extern pthread_mutex_t active_filters_lock;
 extern ndd_activef_t *active_filters;
 extern const int items[7];
 extern char *nfcapd_current;
+extern int loop_read;
 
 //ndd.c functions
 void ndd_assemble_filepath(char path[], char *filter_name, uint64_t time, int time_index);
@@ -27,7 +28,7 @@ int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64
 void *ndd_process_filter_stream(void *p);
 int ndd_process_file();
 void ndd_tcp_flags_decode(char on[], char off[], uint8_t flags, int *on_count);
-int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id, uint64_t threshold);
+int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id, uint64_t threshold, ndd_rec_t *top, char type);
 
 #endif
 

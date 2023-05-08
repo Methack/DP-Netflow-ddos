@@ -16,8 +16,8 @@ void *ndd_manage_io(){
 	int err_written = 0;
 
 	char str[STRING_MAX];
-        strcpy(str, "######------------------######\n      New run ");
-        char run[11];
+    strcpy(str, "######------------------######\n      New run ");
+    char run[11];
 	strncpy(run, filters[1]->db_table + 3, 10);
 	strcat(str, run);
 	strcat(str, "\n");
@@ -95,9 +95,9 @@ void *ndd_manage_io(){
 	}
 
 
-        time_t tm = time(NULL);
+    time_t tm = time(NULL);
 	char tstr[20];
-        strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&tm));
+    strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&tm));
 	
 	fprintf(normal, "%s | IO end\n", tstr);
 	fflush(normal);

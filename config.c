@@ -65,32 +65,42 @@ int ndd_config_parse_fint(int value, int field, ndd_filter_t *f, ndd_filter_t *d
 		}
 		case NDD_THSTEPS : {
 			if(f == NULL){
-                                target_value = &d->thsteps;
-                        }else{
-                                target_value = &f->thsteps;
-                                if(d->thsteps < 0)
-                                        d->thsteps = value;
-                        }
-	     		break;		
+				target_value = &d->thsteps;
+			}else{
+				target_value = &f->thsteps;
+				if(d->thsteps < 0)
+					d->thsteps = value;
+			}
+			break;		
 		}
 		case NDD_DATASET_WINDOW : {
 			if(f == NULL){
-                                target_value = &d->dataset_window;
-                        }else{
-                                target_value = &f->dataset_window;
-                                if(d->dataset_window < 0)
-                                        d->dataset_window = value;
-                        }
+				target_value = &d->dataset_window;
+			}else{
+				target_value = &f->dataset_window;
+				if(d->dataset_window < 0)
+					d->dataset_window = value;
+			}
 			break;
 		}
 		case NDD_DATASET_CHUNKS : {
 			if(f == NULL){
-                                target_value = &d->dataset_chunks;
-                        }else{
-                                target_value = &f->dataset_chunks;
-                                if(d->dataset_chunks < 0)
-                                        d->dataset_chunks = value;
-                        }
+				target_value = &d->dataset_chunks;
+			}else{
+				target_value = &f->dataset_chunks;
+				if(d->dataset_chunks < 0)
+					d->dataset_chunks = value;
+			}
+			break;
+		}
+		case NDD_ACTIVE_FILTER_DURATION : {
+			if(f == NULL){
+				target_value = &d->active_filter_duration;
+			}else{
+				target_value = &f->active_filter_duration;
+				if(d->active_filter_duration < 0)
+					d->active_filter_duration = value;
+			}
 			break;
 		}
 	}
@@ -123,12 +133,12 @@ void ndd_fill_items(char* tmp, int *target){
 	int found = 0;
         //find positions
 	for(int i = 1; i < items_count; i++){
-        	char *pos = strstr(tmp, items_text[i]);
-                if(pos){
+		char *pos = strstr(tmp, items_text[i]);
+		if(pos){
 			found++;
 			positions[i] = (int)(pos - tmp) + 1;
-                }
-        }
+		}
+	}
 	//fill target
 	for(int i = 0; i < found; i++){
 		int min_position = 0;
@@ -314,6 +324,12 @@ int ndd_config_parse(){
                         ndd_config_parse_fint(itmp, NDD_THSTEP, f1, defaults, line_number);
                         continue;
                 }
+		if(sscanf(line, " active_filter_duration = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+                                continue;
+                        ndd_config_parse_fint(itmp, NDD_ACTIVE_FILTER_DURATION, f1, defaults, line_number);
+                        continue;
+		}
 
 		fprintf(stderr, "Syntax error parsing config on line %d\n", line_number);
 	}
@@ -398,10 +414,10 @@ int ndd_config_parse(){
 		}
 		if(!ndd_active_array_items(f->eval_items, items_count)){
 			if(!ndd_active_array_items(defaults->eval_items, items_count)){
-				fprintf(stderr, "Missing default value for eval_items - These will be used : dstip srcip srcport\n");
-				defaults->eval_items[0] = 2;
-				defaults->eval_items[1] = 1;
-				defaults->eval_items[2] = 4;
+				fprintf(stderr, "Missing default value for eval_items - These will be used : srcport dstip srcip\n");
+				defaults->eval_items[0] = 4;
+				defaults->eval_items[1] = 2;
+				defaults->eval_items[2] = 1;
 			}
 			for(int i = 0; i < items_count; i++){
 				f->eval_items[i] = defaults->eval_items[i];
@@ -444,6 +460,13 @@ int ndd_config_parse(){
 				defaults->thstep = DEFAULT_THSTEP;
 			}
 			f->thstep = defaults->thstep;
+		}
+		if(f->active_filter_duration < 0){
+			if(defaults->active_filter_duration < 0){
+				fprintf(stderr, "Missing default value for active_filter_duration - Value \'%d\' will be used\n", DEFAULT_ACTIVE_FILTER_DURATION);
+				defaults->active_filter_duration = DEFAULT_ACTIVE_FILTER_DURATION;
+			}
+			f->active_filter_duration = defaults->active_filter_duration;
 		}
 
 		//Create table in db

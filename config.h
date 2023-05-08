@@ -13,6 +13,7 @@
 #define DEFAULT_DATASET_CHUNKS          6
 #define DEFAULT_THSTEP                  4
 #define DEFAULT_THSTEPS                 4
+#define DEFAULT_ACTIVE_FILTER_DURATION	300
 #define DEFAULT_MAX_NEWEST_CUTOFF       20
 #define DEFAULT_COEFFICIENT             300
 #define DEFAULT_DB_INSERT_INTERVAL      60
@@ -27,6 +28,7 @@
 #define NDD_COEFFICIENT                 0x07
 #define NDD_DB_INSERT_INTERVAL          0x08
 #define NDD_MAX_BASELINE_INCREASE       0x09
+#define NDD_ACTIVE_FILTER_DURATION	0x0A
 
 //global_variables
 extern const int col_count;

@@ -15,21 +15,19 @@ void ndd_assemble_filepath(char path[], char *filter_name, uint64_t time, int ti
 }
 
 int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64_t old_time, int time_index){
-        int removed = 0;
+	int removed = 0;
         ndd_filter_t *f = filters[filter_id];
         ndd_rec_t *a = r->prev;
 	r->prev = NULL;
 	ndd_rec_t *b;
         lnf_file_t *file;
         lnf_rec_t *rec;
-
-        if(old_time){
-                //remove file older than dataset_window
-                char old_path[STRING_MAX];
-                ndd_assemble_filepath(old_path, f->db_table, old_time, time_index);
-                remove(old_path);
-        }
-
+        
+        //remove file older than dataset_window
+        char old_path[STRING_MAX];
+        ndd_assemble_filepath(old_path, f->db_table, old_time, time_index);
+        remove(old_path);
+        
         //create new file
         char new_path[STRING_MAX];
         ndd_assemble_filepath(new_path, f->db_table, new_time, time_index);
@@ -43,17 +41,15 @@ int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64
 		
 		return -1;
         }
-
         lnf_rec_init(&rec);
 
         while(a){
-                lnf_rec_fset(rec, LNF_FLD_BREC1, &a->brec);
+		lnf_rec_fset(rec, LNF_FLD_BREC1, &a->brec);
 		lnf_rec_fset(rec, LNF_FLD_TCP_FLAGS, &a->tcp_flags);
-
+		
                 b = a;
                 a = a->prev;
-                if(new_time > 0)
-			free(b);
+		free(b);
 
                 removed++;
 
@@ -72,6 +68,7 @@ int ndd_write_to_new_file(ndd_rec_t *r, int filter_id, uint64_t new_time, uint64
         return removed;
 }
 
+int waiting = 0;
 
 void *ndd_process_filter_stream(void *p){
 	//Get filter information
@@ -94,6 +91,24 @@ void *ndd_process_filter_stream(void *p){
 	uint64_t pks_baseline = 0;
 	uint64_t pps = 0;
 
+	int update_baseline = 1;
+
+	//current bytes
+	uint64_t current_b_arr[f->dataset_window];
+	memset(current_b_arr, 0, f->dataset_window*sizeof(uint64_t));
+	uint64_t current_b_sum = 0;
+	uint64_t current_b = 0;
+	uint64_t prev_current_b = 0;
+
+	//current packets
+	uint64_t current_p_arr[f->dataset_window];
+	memset(current_p_arr, 0, f->dataset_window*sizeof(uint64_t));
+	uint64_t current_p_sum = 0;
+	uint64_t current_p = 0;
+	uint64_t prev_current_p = 0;
+
+	int current_index = 0;
+
 	//timestamp of newest flow recieved
         uint64_t newest = 0;
 	//index of flow with current newest time
@@ -114,9 +129,12 @@ void *ndd_process_filter_stream(void *p){
 	uint64_t packets = 0;
 
 	//variables used for attack detection
-	uint64_t prev_baseline_limit = 0;
+	uint64_t prev_b_baseline_limit = 0;
+	uint64_t prev_p_baseline_limit = 0;
 	int window_filled = 0;
 	int increase_insert = 0;
+
+	int older_cutoff = 0;
 
 	//information
 	int values_count = 0;
@@ -136,9 +154,14 @@ void *ndd_process_filter_stream(void *p){
 	//logging
 	char msg[STRING_MAX*2];
 	while(f->stream){
+		if(waiting && !(*new)->next){
+			break;
+			f->stream_elements = 0;
+		}
+		
 		//lock stream
 		pthread_mutex_lock(&f->stream_lock);
-		
+
 		//KEEP FOR X SECS
 		if((*new) == NULL){
 			//there are no records
@@ -166,11 +189,17 @@ void *ndd_process_filter_stream(void *p){
 		//unlock stream mutex
 		pthread_mutex_unlock(&f->stream_lock);
 
-		//total number of bytes send in current baseline window
-                bts_sum += bytes;
+		if(update_baseline){
+			//total number of bytes send in current baseline window
+                	bts_sum += bytes;
 		
-		//total number of packets send in current baseline window
-                pks_sum += packets;
+			//total number of packets send in current baseline window
+                	pks_sum += packets;
+		}
+
+		//currents
+		current_b_sum += bytes;
+		current_p_sum += packets;
 
                 //remove ms
                 ftime = ftime / 1000;
@@ -187,30 +216,37 @@ void *ndd_process_filter_stream(void *p){
                 //new newest time
                 if(newest < ftime){
                         int dif = ftime - newest;
-                        if(dif < f->max_newest_cutoff){
+                        if(dif < f->max_newest_cutoff || older_cutoff > 100){
+				older_cutoff = 0;
 				//move in time
                                 sec_prev_insert += dif;
                                 newest = ftime;
 
-				chunks++;
+				//current
+				current_index = current_index < (f->dataset_window-1) ? current_index + 1 : 0;
+				current_b_sum -= current_b_arr[current_index];
+				current_b_arr[current_index] = 0;
+				current_p_sum -= current_p_arr[current_index];
+				current_p_arr[current_index] = 0;
 
-				increase_insert = 1;
+				chunks++;
+				increase_insert++;
 				//dataset creation
 				if(chunks >= (f->dataset_window/f->dataset_chunks)){
 					time_index++;
 					time_index = time_index >= f->dataset_chunks ? 0 : time_index;
 					uint64_t old_time = file_times[time_index];
         				file_times[time_index] = (uint64_t)time(NULL);
-					
+				
 					int removed =  ndd_write_to_new_file((*new), *id, file_times[time_index], old_time, time_index);
 					records_inserted[time_index] = removed;
-
+					
 					pthread_mutex_lock(&f->stream_lock);
 					f->stream_elements -= removed;
-					pthread_mutex_unlock(&f->stream_lock);
-
 					if(print)
 						printf("F#%d => New dataset file, records inserted %d, records remaining %d\n", *id, records_inserted[time_index], f->stream_elements);
+					pthread_mutex_unlock(&f->stream_lock);
+
 					if(logging){
 						if(time_index == 0){
 							char num[10];
@@ -233,7 +269,7 @@ void *ndd_process_filter_stream(void *p){
 				}
 
 				//clear oldest information
-                                for(int j = 1; j <= dif; j++){
+                                for(int j = 1; j <= dif && update_baseline; j++){
                                         int index = nid + j;
                                         //correct index to within bounds
                                         index = index >= f->baseline_window ? index - f->baseline_window : index;
@@ -248,56 +284,99 @@ void *ndd_process_filter_stream(void *p){
                         }else{
 				//current flow is much newer => add it to current second
                                 cid = nid;
+				//prevent getting stuck in the past
+				older_cutoff++;
+				if(older_cutoff > 100){
+					if(logging)
+						ndd_fill_comm("Got stuck in the past\n", ERROR_MESSAGE, *id);
+					if(print)
+						printf("F#%d => Got stuck in the past\n", *id);
+				}
                         }
                 }
 
 
-                if(cid < 0){
-                        //flow is older than baseline window => add to oldest second
-                        if(nid == (f->baseline_window-1)){
-                                bts[0] += bytes;
-                                pks[0] += packets;
-                        }else{
-                                bts[nid+1] += bytes;
-                                pks[nid+1] += packets;
-                        }
-                }else{
-                        //add bytes to specific second
-                        bts[cid] += bytes;
-                        pks[cid] += packets;
-                }
+		if(update_baseline){
+                	if(cid < 0){
+                        	//flow is older than baseline window => add to oldest second
+                        	if(nid == (f->baseline_window-1)){
+                                	bts[0] += bytes;
+                                	pks[0] += packets;
+                        	}else{
+                                	bts[nid+1] += bytes;
+                                	pks[nid+1] += packets;
+                        	}
+                	}else{
+                        	//add bytes to specific second
+                        	bts[cid] += bytes;
+                        	pks[cid] += packets;
+                	}
 
-		//check which value are to be computed, based on list of columns in config
-		if(f->db_columns[0] || f->db_columns[1]){
                 	//compute new baseline for bytes per second
                 	bps = bts_sum / f->baseline_window;
-                	bts_baseline = (bts_baseline + bps * f->coefficient) / (f->coefficient + 1);
-		}
-
-		if(f->db_columns[2] || f->db_columns[3]){
-                	//compute new baseline for packets per second
+               		bts_baseline = (bts_baseline + bps * f->coefficient) / (f->coefficient + 1);
+                
+			//compute new baseline for packets per second
                 	pps = pks_sum / f->baseline_window;
                 	pks_baseline = (pks_baseline + pps * f->coefficient) / (f->coefficient + 1);
 		}
 
+		//fill current arrs
+		current_b_arr[current_index] += bytes;
+		current_p_arr[current_index] += packets;
+
+		//calculate most recent current
+		current_b = current_b_sum / f->dataset_window;
+		current_p = current_p_sum / f->dataset_window;
+
+		if(!update_baseline && prev_b_baseline_limit > current_b && prev_p_baseline_limit > current_p){
+			update_baseline = 1;
+			if(logging)
+				ndd_fill_comm("Current is normal => starting baseline calculation\n", ERROR_MESSAGE, *id);
+			if(print)
+				printf("F#%d => Current is normal => starting baseline calculation\n", *id);
+		}
+
+		if((prev_current_b != 0 && (prev_current_b*2) < current_b) || (prev_current_p != 0 && (prev_current_p*2) < current_p)){
+			increase_insert = 5;
+		}
 
 		//check for substantial increase in baseline
-		if(window_filled && (bts_baseline > prev_baseline_limit) && increase_insert){
-			uint64_t prev_baseline = prev_baseline_limit / f->max_baseline_increase;
-			if(ndd_db_insert_detection(f->db_table, newest, bts_baseline, prev_baseline)){
+		if(window_filled && increase_insert >= 5 && (prev_b_baseline_limit < current_b || prev_p_baseline_limit < current_p)){
+			uint64_t prev_baseline;
+			char type;
+			uint64_t insert_baseline;
+			uint64_t limit;
+
+			if(prev_b_baseline_limit < current_b){
+				prev_baseline = prev_b_baseline_limit / f->max_baseline_increase;
+				type = 'B';
+				insert_baseline = bts_baseline;
+				limit = prev_b_baseline_limit;
+				prev_current_b = current_b;
+				prev_current_p = 0;
+			}else{
+				prev_baseline = prev_p_baseline_limit / f->max_baseline_increase;
+				type = 'p';
+				insert_baseline = pks_baseline;
+				limit = prev_p_baseline_limit;
+				prev_current_p = current_p;
+				prev_current_b = 0;
+			}
+			
+			if(ndd_db_insert_detection(f->db_table, newest, insert_baseline, prev_baseline, type)){
 				//substantial increase detected => information inserted into db	
 				increase_insert = 0;
 			}
-			//before finding pattern create new dataset file with all processed records in memory
-			//this file is temporary and this process doesn't free records from memory
-			int asd = ndd_write_to_new_file((*new), *id, 0, 0, 0);
-			if(print)
-				printf("F#%d => New temp dataset file created with %d - %d remaining\n", *id, asd, f->stream_elements);
-			//try ti find attack pattern in dataset
-			ndd_find_attack_pattern(file_times, f->dataset_chunks, *id, prev_baseline_limit);
-			char temp_file[STRING_MAX];
-			ndd_assemble_filepath(temp_file, f->db_table, 0, 0);
-			remove(temp_file);
+			//printf("Hodnoty tu jsou baseline %luBps %lupps | Current %luBps %lupps | threshold %luBps %lupps\n", bts_baseline, pks_baseline, current_b, current_p, prev_b_baseline_limit, prev_p_baseline_limit);
+			//try to find attack pattern in dataset
+			if(ndd_find_attack_pattern(file_times, f->dataset_chunks, *id, limit, (*new), type)){
+				if(logging)
+					ndd_fill_comm("Found active_filter => stopping baseline calculation\n", ERROR_MESSAGE, *id);
+				if(print)
+					printf("F#%d => Found active_filter => stopping baseline calculation\n", *id);
+				update_baseline = 0;
+			}
 		}
 
                 if(sec_prev_insert >= f->db_insert_interval){
@@ -322,14 +401,18 @@ void *ndd_process_filter_stream(void *p){
 					window_filled = successful_insert * f->db_insert_interval > f->baseline_window ? 1 : 0;
 				}
 				successful_insert++;
-				prev_baseline_limit = bts_baseline * f->max_baseline_increase;
+				if(update_baseline){
+					prev_b_baseline_limit = bts_baseline * f->max_baseline_increase;
+					prev_p_baseline_limit = pks_baseline * f->max_baseline_increase;
+				}
 				if(logging){
-					sprintf(msg, "Inserts %d(failed %d): Threshold %lu\n", successful_insert, failed_insert, prev_baseline_limit);
+					sprintf(msg, "Inserts %d(failed %d): Threshold B-%lu | p-%lu\n", successful_insert, failed_insert, prev_b_baseline_limit, prev_p_baseline_limit);
 					ndd_fill_comm(msg, NORMAL_MESSAGE, *id);
 				}
 				if(print)
-					printf("F#%d => Inserts %d(failed %d): Threshold %lu\n", *id, successful_insert, failed_insert, prev_baseline_limit);
+					printf("F#%d => Inserts %d(failed %d): Threshold B-%lu | p-%lu\n", *id, successful_insert, failed_insert, prev_b_baseline_limit, prev_p_baseline_limit);
 				
+				//if set stop program after number of db insertes
 				if(stop_number > 0 && successful_insert >= stop_number)
 					stop = 0;
 			}else{
@@ -339,6 +422,8 @@ void *ndd_process_filter_stream(void *p){
                 }
 	}
 	
+	f->stream_elements = 0;
+
 	//clear all dataset files
 	char filepath[STRING_MAX];
 	for(int i = 0; i < f->dataset_chunks; i++){
@@ -358,9 +443,7 @@ int ndd_process_file(){
         lnf_file_t *filep;
         lnf_rec_t *rec;
 
-        int loopread = 1;
-
-        if(lnf_open(&filep, nfcapd_current, LNF_READ | loopread ? LNF_READ_LOOP : 0, NULL) != LNF_OK){
+        if(lnf_open(&filep, nfcapd_current, LNF_READ | loop_read ? LNF_READ_LOOP : 0, NULL) != LNF_OK){
 		fprintf(stderr, "Failed to open file %s\n", nfcapd_current);
 		exit(1);
         }
@@ -368,7 +451,7 @@ int ndd_process_file(){
         lnf_rec_init(&rec);
 
         int ret;
-
+	int wait_time;
         uint64_t bytes;
         
         ndd_rec_t *first[filters_count];
@@ -399,9 +482,28 @@ int ndd_process_file(){
                 ret = lnf_read(filep, rec);
 
                 if(ret == LNF_EOF){
+			//If loop_read is not set, exit when encountering EOF
+			if(!loop_read)
+				break;
+			//If loop_read is set, EOF is error -> try to open file again
 			if(logging)
-				ndd_fill_comm("Found EOF in nfcapd.current\n", ERROR_MESSAGE, 0);
-			break;
+                                ndd_fill_comm("Found EOF in nfcapd.current\n", ERROR_MESSAGE, 0);
+			wait_time = 1;
+			int recover_tries = 0;
+			while(1){
+				ret = lnf_read(filep, rec);
+				if(ret == LNF_EOF){
+					char msg[STRING_MAX];
+					sprintf(msg, "Found EOF again (%d), will continue trying after %ds \n", recover_tries, wait_time);
+					ndd_fill_comm(msg, ERROR_MESSAGE, 0);
+					sleep(wait_time);
+                                	wait_time = wait_time < 128 ? wait_time << 1 : wait_time;
+					recover_tries++;
+				}else{
+					ndd_fill_comm("Managed to recover from EOF, will continue normal operations\n", ERROR_MESSAGE, 0);
+					break;
+				}
+			}
                 }
 
                 for(int i = 1; i < filters_count; i++){
@@ -432,8 +534,14 @@ int ndd_process_file(){
 		ndd_fill_comm("Main done\n", NORMAL_MESSAGE, 0);
 	if(print)
 		printf("Main done\n");
-	
+	waiting = 1;
 	for(int j = 1; j < filters_count; j++){
+		if(!loop_read){
+			while(filters[j]->stream_elements > 1){
+				sleep(1);
+			}
+		}
+		
 		if(logging)
 			ndd_fill_comm("Done\n", NORMAL_MESSAGE, j);
 		
@@ -482,7 +590,8 @@ void ndd_tcp_flags_decode(char on[], char off[], uint8_t flags, int *on_count){
 	
 }
 
-int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id, uint64_t threshold){
+
+int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id, uint64_t threshold, ndd_rec_t *top, char type){
 	lnf_rec_t *rec;
 	ndd_filter_t *f = filters[filter_id];
 	lnf_mem_t *mem_original_dataset;
@@ -491,6 +600,9 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 	int temp = 0;
 	uint64_t threshold2 = threshold;
 	int thstep = f->thstep;
+	int top_x = 1;
+	int max_top_x = 1;
+	int active_filters_made = 0;
 
 	lnf_rec_init(&rec);
 	lnf_mem_init(&mem_original_dataset);
@@ -511,21 +623,28 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 	lnf_mem_fadd(mem_original_dataset, LNF_FLD_LAST, LNF_AGGR_MAX, 0, 0);
 
 	
-	if(logging)
-		ndd_fill_comm("!!! Entering attack pattern finding !!!\n", ERROR_MESSAGE, filter_id);
+	if(logging){
+		sprintf(msg, "!!! Entering attack pattern finding |%c|threshold - %lu  !!!\n", type, threshold);
+		ndd_fill_comm(msg, ERROR_MESSAGE, filter_id);
+	}
 	if(print)
-		printf("F#%d => !!! Entering attack pattern finding !!!\n", filter_id);
+		printf("F#%d => !!! Entering attack pattern finding |%c|threshold - %lu  !!!\n", filter_id, type, threshold);
 
-
+	//fill lnf memory with rec that are processed but not in dataset files
+	while(top){
+		lnf_rec_fset(rec, LNF_FLD_BREC1, &top->brec);
+		lnf_rec_fset(rec, LNF_FLD_TCP_FLAGS, &top->tcp_flags);
+		lnf_mem_write(mem_original_dataset, rec);
+		top = top->prev;
+		temp++;
+	}
+	
 	//read whole dataset
-	for(int i = -1; i < file_count; i++){
+	for(int i = 0; i < file_count; i++){
 		lnf_file_t *file;
 
 		char path[STRING_MAX];
-          	if(i >= 0)
-			ndd_assemble_filepath(path, f->db_table, file_times[i], i);
-		else
-			ndd_assemble_filepath(path, f->db_table, 0, 0);
+		ndd_assemble_filepath(path, f->db_table, file_times[i], i);
 
 		if(lnf_open(&file, path, LNF_READ, NULL) != LNF_OK){
 			if(logging){
@@ -539,8 +658,6 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 		while(lnf_read(file, rec) != LNF_EOF){
 			lnf_mem_write(mem_original_dataset, rec);
 			records++;
-			if(i < 0)
-				temp++;
 		}
 
 		lnf_close(file);	
@@ -563,13 +680,20 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 		int aggr_filters_count = 0;
         	int filter_candidate[items_count];
 		memset(filter_candidate, 0, sizeof(int)*items_count);
-        	char filter_candidate_text[items_count][STRING_MAX];
+        	char filter_candidate_text[items_count][STRING_MAX*max_top_x/32];
 	        lnf_filter_t *aggr_filters[items_count];
+		top_x = 1;
 		// --- 2 + 3 + 4 + 5 + 6 + 7 + 8 ---
 		for(int i = 0; i < items_count; i++){
 			if(f->eval_items[i] == 0)
 				break;
-			
+			if(i < (items_count-1)){
+				if(f->eval_items[i+1] == 0)
+					top_x = max_top_x;
+			}else{
+				top_x = max_top_x;
+			}
+
 			//filter and aggregace dataset
 			lnf_mem_t *mem_altered_dataset;
 			lnf_mem_init(&mem_altered_dataset);
@@ -592,52 +716,92 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			
 			int passed = 1;
 			int active_reject = 0;
+			uint64_t active_reject_unit = 0;
 			uint64_t dataset_baseline = 0;
-			uint64_t bytes = 0;
+			uint64_t unit = 0;
 			while(csr != NULL){
 				lnf_mem_read_c(mem_original_dataset, csr, rec);
 				lnf_mem_next_c(mem_original_dataset, &csr);
 				passed = 1;
 
-				//records REJECTED based on global active_filters
-				for(int j = 0; j < act_filters_count; j++){
-					if(lnf_filter_match(act_filters[j], rec)){		
-						passed = 0;
-						active_reject++;
-						break;
+				//Always filter the fastest way possible
+				if(act_filters_count <= aggr_filters_count){
+					//records REJECTED based on global active_filters
+					for(int j = 0; j < act_filters_count; j++){
+						if(lnf_filter_match(act_filters[j], rec)){		
+							passed = 0;
+							if(type == 'B')
+								lnf_rec_fget(rec, LNF_FLD_DOCTETS, &unit);
+							else
+								lnf_rec_fget(rec, LNF_FLD_DPKTS, &unit);
+							active_reject_unit += unit;
+							active_reject++;
+							break;
+						}
 					}
-				}
-				if(!passed)
-					continue;
+					if(!passed)
+						continue;
 
-				//--- 3 ---
-				//records SELECTED based on aggr_filter
-				for(int j = 0; j < aggr_filters_count; j++){
-					if(!lnf_filter_match(aggr_filters[j], rec)){
-						passed = 0;
-						break;
+					//--- 3 ---
+					//records SELECTED based on aggr_filter
+					for(int j = 0; j < aggr_filters_count; j++){
+						if(!lnf_filter_match(aggr_filters[j], rec)){
+							passed = 0;
+							break;
+						}
 					}
+				}else{
+					//--- 3 ---
+                                        //records SELECTED based on aggr_filter
+                                        for(int j = 0; j < aggr_filters_count; j++){
+                                                if(!lnf_filter_match(aggr_filters[j], rec)){
+                                                        passed = 0;
+                                                        break;
+                                                }
+                                        }
+					
+					if(!passed)
+                                                continue;
+
+					//records REJECTED based on global active_filters
+                                        for(int j = 0; j < act_filters_count; j++){
+                                                if(lnf_filter_match(act_filters[j], rec)){
+                                                        passed = 0;
+                                                        if(type == 'B')
+                                                                lnf_rec_fget(rec, LNF_FLD_DOCTETS, &unit);
+                                                        else
+                                                                lnf_rec_fget(rec, LNF_FLD_DPKTS, &unit);
+                                                        active_reject_unit += unit;
+                                                        active_reject++;
+                                                        break;
+                                                }
+                                        }
 				}
 
 				if(passed){
 					lnf_mem_write(mem_altered_dataset, rec);
 				}
-				lnf_rec_fget(rec, LNF_FLD_DOCTETS, &bytes);
-                                dataset_baseline += bytes;
+				if(type == 'B')
+                                	lnf_rec_fget(rec, LNF_FLD_DOCTETS, &unit);
+                                else
+                                        lnf_rec_fget(rec, LNF_FLD_DPKTS, &unit);
+                                dataset_baseline += unit;
 			}
 
 			dataset_baseline = dataset_baseline / f->dataset_window;
 			//--- 2 ---
 			if(dataset_baseline <= threshold){
-				if(logging)
-	                		ndd_fill_comm("!!! Ending pattern finding: current < threshold !!!\n", NORMAL_MESSAGE, filter_id);
+				if(logging){
+	                		sprintf(msg, "!!! Ending pattern finding: current < threshold | %lu < %lu!!!\n", dataset_baseline, threshold);
+					ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+				}
 				if(print)
-					printf("F#%d => !!! Ending pattern finding: current < threshold !!!\n", filter_id);
+					printf("F#%d => !!! Ending pattern finding: current < threshold | %lu < %lu!!!\n", filter_id, dataset_baseline, threshold);
 				//EXIT + free everything
 				lnf_rec_free(rec);
 				lnf_mem_free(mem_original_dataset);
 				lnf_mem_free(mem_altered_dataset);
-				return 0;
+				return active_filters_made;
 			}
 				
 			
@@ -645,13 +809,13 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			uint8_t tcp_flags = 0;
 			lnf_mem_first_c(mem_altered_dataset, &csr);
 			if(logging){
-                                sprintf(msg, "Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records | aggregated based on %s | threshold2 %lu\n",
-					aggr_filters_count, active_filters_count, active_reject, items_text[f->eval_items[i]], threshold2);
+                                sprintf(msg, "Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records (%lu%c) | aggregated based on %s | threshold2 %lu\n",
+					aggr_filters_count, active_filters_count, active_reject, active_reject_unit, type, items_text[f->eval_items[i]], threshold2);
 	                        ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
                         }
 			if(print){
-				printf("F#%d => Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records | aggregated based on %s | threshold2 %lu\n",
-					filter_id, aggr_filters_count, active_filters_count, active_reject, items_text[f->eval_items[i]], threshold2);
+				printf("F#%d => Dataset filtered with %d aggr_filters | %d active_filters -> filtered %d records (%lu%c) | aggregated based on %s | threshold2 %lu\n",
+					filter_id, aggr_filters_count, active_filters_count, active_reject, active_reject_unit, type, items_text[f->eval_items[i]], threshold2);
 			}
 			uint64_t first;
 			uint64_t last;
@@ -659,7 +823,6 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 
 			records = 0;
 			//how many top records are selected
-			int top_x = 1;
 			int index = 0;
 			dataset_baseline = 0;
 			while(csr != NULL){
@@ -668,7 +831,10 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 					//get number of bytes from top record and transform it into current[bps]
 					lnf_rec_fget(rec, LNF_FLD_FIRST, &first);
                                         lnf_rec_fget(rec, LNF_FLD_LAST, &last);
-					lnf_rec_fget(rec, LNF_FLD_DOCTETS, &top_current);
+					if(type == 'B')
+						lnf_rec_fget(rec, LNF_FLD_DOCTETS, &top_current);
+					else
+						lnf_rec_fget(rec, LNF_FLD_DPKTS, &top_current);
 					uint64_t duration = (last - first) / 1000;
                                         duration = duration > 0 ? duration : 1;
                                         top_current = top_current / duration;
@@ -682,13 +848,13 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
                                         inet_ntop(AF_INET6, &brec.dstaddr, dbuf, INET6_ADDRSTRLEN);
 
                                         if(logging){
-                                                snprintf(msg, STRING_MAX, "(%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %luB/s\n",
-							(records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current);
+                                                snprintf(msg, STRING_MAX, "(%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %lu%cps\n",
+							(records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current, type);
                                                 ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
                                         }
                                         if(print){
-                                                printf("F#%d => (%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %luB/s\n",
-                                                        filter_id, (records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current);
+                                                printf("F#%d => (%d) src %s - %d | dst %s - %d | %lluB - %llupkts | Prot %d - Tcp-flags %d | Current - %lu%cps\n",
+                                                        filter_id, (records+1), sbuf, brec.srcport, dbuf, brec.dstport, (LLUI)brec.bytes, (LLUI)brec.pkts, brec.prot, tcp_flags, top_current, type);
 					}
 
 					//--- 6 ---
@@ -696,7 +862,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 						//add to filter_candidate + make aggr_filter
 						//--- 7 ---
 						lnf_rec_fget(rec, LNF_FLD_BREC1, &brec);
-						char filter_text[STRING_MAX]; 
+						char filter_text[STRING_MAX/32]; 
 						switch(items[f->eval_items[i]]){
 							case LNF_FLD_SRCADDR : {
 								index = 1;
@@ -769,7 +935,11 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 							strcpy(filter_candidate_text[index], filter_text);
 						}
 						filter_candidate[index]++;
+					}else{
+						break;
 					}
+				}else{
+					break;
 				}
 				records++;
 				lnf_mem_next_c(mem_altered_dataset, &csr);
@@ -790,7 +960,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 				if(print)
 					printf("F#%d => Added filter_candidate %d - %s\n", filter_id, index, filter_candidate_text[index]);
 				if(filter_candidate[index] > 1){
-					char filter_text[STRING_MAX];
+					char filter_text[STRING_MAX*max_top_x/32];
 					strcpy(filter_text, "(");
 					strcat(filter_text, filter_candidate_text[index]);
 					strcat(filter_text, ")");
@@ -809,6 +979,27 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 					aggr_filters[aggr_filters_count] = flt;
                                 	aggr_filters_count++;
                                 }
+			}else{
+				int item_skip = 0;
+				for(int j = 0; j < items_count; j++){
+					if(f->required_items[j] == 0)
+						break;
+					if(f->eval_items[i] == f->required_items[j]){
+						item_skip = 1;
+						break;
+					}
+				}
+				//skip all other items if required-item top1 not good enough
+				if(item_skip){
+					lnf_mem_free(mem_altered_dataset);
+					if(logging){
+						sprintf(msg, "Skipping => %s top1 not good enough\n", items_text[f->eval_items[i]]);
+						ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+					}
+					if(print)
+						printf("F#%d => Skipping => %s top1 not good enough\n", filter_id, items_text[f->eval_items[i]]);
+					break;
+				}
 			}
 
 			lnf_mem_free(mem_altered_dataset);
@@ -824,10 +1015,11 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			lnf_filter_free(aggr_filters[i]);
 		}
 
-		char found_pattern[STRING_MAX];
+		char found_pattern[STRING_MAX*top_x/32];
 		int first = 1;
 		int required_items_counted = 0;
 		int matching_filter_candidates_counted = 0;
+		int active_sources = 0;
 		//--- 9 ---
 		for(int i = 0; i < items_count; i++){
 			if(f->required_items[i] == 0)
@@ -842,6 +1034,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 					strcat(found_pattern, " AND ");
 					strcat(found_pattern, filter_candidate_text[f->required_items[i]]);
 				}
+				active_sources += filter_candidate[f->required_items[i]];
 				matching_filter_candidates_counted++;
 			}
 			required_items_counted++;
@@ -850,17 +1043,21 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 		if(logging){
                         sprintf(msg, "Filter_candidate contains %d items from Required_items (%d needed)\n", matching_filter_candidates_counted, required_items_counted);
 	                ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
-			sprintf(msg, "Found pattern : %s\n", found_pattern);
-			ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
                 }
 
-		if(print){
+		if(print)
 			printf("F#%d => Filter_candidate contains %d items from Required_items (%d needed)\n", filter_id, matching_filter_candidates_counted, required_items_counted);
-			printf("F#%d => Found pattern : %s\n", filter_id, found_pattern);
-		}
+		
 
 		if(required_items_counted == matching_filter_candidates_counted){
 			//--- 10 ---
+			if(logging){
+                        	sprintf(msg, "Pattern : %s\n", found_pattern);
+                        	ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
+			}
+			if(print)
+				printf("F#%d => Pattern : %s\n", filter_id, found_pattern);
+
 			int con;
                         lnf_filter_t *flt;
                         if((con = lnf_filter_init_v1(&flt, found_pattern)) != LNF_OK){
@@ -869,7 +1066,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 					ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
 				}
                         	fprintf(stderr, "F#%d => Failed to initialise libnf filter (%d): \"%s\"\n", filter_id, con, found_pattern);
-                        	continue;
+                        	break;
                         }else{
 				if(logging){
                                         sprintf(msg, "Filter \"%s\" (%p) initialized and added to active_filters \n", found_pattern, flt);
@@ -878,8 +1075,10 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 				if(print)
                         		printf("F#%d => Filter \"%s\" (%p) initialized and added to active_filters \n", filter_id, found_pattern, flt);
                         }
-			ndd_add_active_filter(flt, found_pattern, 30, f->db_table);
+			ndd_add_active_filter(flt, found_pattern, f->active_filter_duration, f->db_table);
+			active_filters_made++;
 			threshold2 = threshold;
+			thstep = f->thstep;
 			if(logging){
 				sprintf(msg, "Threshold2 reseting to %lu\n", threshold2);
 				ndd_fill_comm(msg, NORMAL_MESSAGE, filter_id);
@@ -887,6 +1086,11 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 			if(print)
 				printf("F#%d => Threshold2 reseting to %lu\n", filter_id, threshold2);
 		}else{
+			if(logging)
+				ndd_fill_comm("Insufficient filter_candidate contents to make active_filter\n", NORMAL_MESSAGE, filter_id);
+			if(print)
+				printf("F#%d => Insufficient filter_candidate contents to make active_filter\n", filter_id);
+			
 			//--- 11 ---
 			thstep--;
 			//--- 12 ---
@@ -909,7 +1113,7 @@ int ndd_find_attack_pattern(uint64_t file_times[], int file_count, int filter_id
 
 	lnf_rec_free(rec);
 	lnf_mem_free(mem_original_dataset);
-	return records;
+	return active_filters_made;
 }
 
 
