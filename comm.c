@@ -2,11 +2,11 @@
 
 void *ndd_manage_io(){
 	//Failed to create logs dir, abort
-        if(mkdir("./logs/", 0777) && errno != EEXIST){
-                fprintf(stderr, "Failed to create logs dir - %s\n", strerror(errno));
-                logging = 0;
+	if(mkdir("./logs/", 0777) && errno != EEXIST){
+		fprintf(stderr, "Failed to create logs dir - %s\n", strerror(errno));
+		logging = 0;
 		return NULL;
-        }
+	}
 	
 	FILE *normal = fopen("./logs/ndd.logs", "a");
 	FILE *err = fopen("./logs/ndd.err", "a");
@@ -16,8 +16,8 @@ void *ndd_manage_io(){
 	int err_written = 0;
 
 	char str[STRING_MAX];
-    strcpy(str, "######------------------######\n      New run ");
-    char run[11];
+	strcpy(str, "######------------------######\n      New run ");
+	char run[11];
 	strncpy(run, filters[1]->db_table + 3, 10);
 	strcat(str, run);
 	strcat(str, "\n");
@@ -74,6 +74,9 @@ void *ndd_manage_io(){
 				time_t stat_time = time(NULL);
 				fprintf(stats, "Current filter stats - %s", asctime(localtime(&stat_time)));
 				write_stats = 0;
+				fprintf(stats, "----------------------------------------\n");
+				fprintf(stats, "Total number of filters - %d\n", filters_count-1);
+				fprintf(stats, "Current number of active-filters - %d\n", active_filters_count);
 				for(int i = 0; i < filters_count; i++){
 					ndd_print_filter_info(filters[i], i, stats, 'f');
 				}
@@ -95,9 +98,9 @@ void *ndd_manage_io(){
 	}
 
 
-    time_t tm = time(NULL);
+	time_t tm = time(NULL);
 	char tstr[20];
-    strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&tm));
+	strftime(tstr, 20, "%Y-%m-%d %H:%M:%S", localtime(&tm));
 	
 	fprintf(normal, "%s | IO end\n", tstr);
 	fflush(normal);

@@ -18,6 +18,7 @@
 #define DEFAULT_COEFFICIENT             300
 #define DEFAULT_DB_INSERT_INTERVAL      60
 #define DEFAULT_MAX_BASELINE_INCREASE   3
+#define DEFAULT_MAX_TOP_X		1
 
 #define NDD_BASELINE_WINDOW             0x01
 #define NDD_DATASET_WINDOW              0x02
@@ -29,6 +30,7 @@
 #define NDD_DB_INSERT_INTERVAL          0x08
 #define NDD_MAX_BASELINE_INCREASE       0x09
 #define NDD_ACTIVE_FILTER_DURATION	0x0A
+#define NDD_MAX_TOP_X			0x0B
 
 //global_variables
 extern const int col_count;
@@ -39,6 +41,8 @@ extern char *connection_string;
 extern char *nfcapd_current;
 extern int filters_count;
 extern ndd_filter_t **filters;
+extern int file_count;
+extern char **nfcapd_files;
 
 
 //config.c functions

@@ -5,27 +5,28 @@
 #include <pthread.h>
 #include <time.h>
 
+//from nfddos
 int daemonize(){
-        pid_t pid, sid;
+	pid_t pid, sid;
 
-        pid = fork();
-        if(pid < 0){
-                return 0;
-        }
+	pid = fork();
+	if(pid < 0){
+		return 0;
+	}
 
-        if(pid > 0){
-                exit(0);
-        }
-        sid = setsid();
-        if(sid < 0){
-                return 0;
-        }
+	if(pid > 0){
+		exit(0);
+	}
+	sid = setsid();
+	if(sid < 0){
+		return 0;
+	}
 
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+	close(STDIN_FILENO);
+	close(STDOUT_FILENO);
+	close(STDERR_FILENO);
 
-        return 1;
+	return 1;
 }
 
 const int col_count = 4;
@@ -37,6 +38,8 @@ const int items[7] = {0, LNF_FLD_SRCADDR, LNF_FLD_DSTADDR, LNF_FLD_PROT, LNF_FLD
 
 char *connection_string;
 char *nfcapd_current;
+char **nfcapd_files;
+int file_count = 1;
 
 int filters_count = 0;
 
@@ -70,19 +73,19 @@ int main(int argc, char **argv){
 	int daemon = 0;
 	int delete = 0;
 	int c;
-	while((c = getopt(argc, argv, "pdltrs:")) != -1){
+	while((c = getopt(argc, argv, "pdltrs:m:")) != -1){
 		switch(c){
 			case 'd' : {
 				daemon = 1;
-		     		break;		
+				break;		
 			}
 			case 'p' : {
 				print = 1;
-		     		break;		
+				break;		
 			}
 			case 's' : {
 				stop_number = atoi(optarg);
-		     		break;		
+				break;		
 			}
 			case 't' : {
 				delete = 1;
@@ -90,19 +93,24 @@ int main(int argc, char **argv){
 			}
 			case 'l' : {
 				logging = 1;
-		    		break;		
+				break;		
 			}
 			case 'r' : {
 				loop_read = 0;
 				break;
 			}
+			case 'm' : {
+				file_count = atoi(optarg);
+				break;	   
+			}
 			case '?' : {
-				printf("Usage: %s [ -a ] [ -p ] [ -d ] [ -r ][ -s <number>]\n", argv[0]);
+				printf("Usage: %s [ -a ] [ -p ] [ -d ] [ -r ] [-m <number>] [ -s <number>]\n", argv[0]);
 				printf(" -d : Daemonize program\n");
 				printf(" -p : Print additional information\n");
 				printf(" -t : Drop filter Tables after finishing\n");
 				printf(" -l : Log into log files\n");
 				printf(" -r : Read file not current\n");
+				printf(" -m <n> : Number <n> of input-files, used only in combination with -r\n");
 				printf(" -s <n> : Will Stop program after <n> db inserts\n");
 				return 1;
 			}
@@ -111,6 +119,9 @@ int main(int argc, char **argv){
 	
 	}
 	
+	if(loop_read)
+		file_count = 1;
+
 	ndd_config_parse();
 
 	if(stop_number){
@@ -125,34 +136,42 @@ int main(int argc, char **argv){
 		printf("Will delete filter tables when finished\n");
 	}
 	if(logging){
-                printf("Will be logging\n");
-        }
+		printf("Will be logging\n");
+	}
 	
 	if(daemon){
 		printf("Will daemonize now\n");
 		print = 0;
 		if(!daemonize()){
-                	fprintf(stderr, "Failed to daemonize\n");
-                	return 1;
-        	}
+			fprintf(stderr, "Failed to daemonize\n");
+			return 1;
+		}
 	}
 
 	if(print){
-		printf("Will print additional informacion\n");
+		printf("Will print additional information\n");
 	}
 
 	ndd_process_file();
 	
 
 	for(int i = 0; i < filters_count; i++){
-                ndd_free_filter(filters[i], delete);
-        }
+		ndd_free_filter(filters[i], delete);
+	}
 	for(int i = 0; i < active_filters_count; i++){
 		ndd_free_activef(active_filters);
 	}
 
-        free(filters);
+	if(file_count > 1){
+		for(int i = 0; i < file_count; i++){
+			free(nfcapd_files[i]);
+		}
+	}else{
+		free(nfcapd_current);
+	}
+
+	free(filters);
 	free(active_filters);
-        return 0;
+	return 0;
 }
 

@@ -1,6 +1,6 @@
 NAME=main
 PROGRAM=ndd
-OBJFILES=$(NAME).o nddstruct.o comm.o config.o db.o ndd.o
+OBJFILES=$(NAME).o db.o nddstruct.o comm.o config.o ndd.o
 CC=gcc
 CFLAGS=-Wall -Wextra -Werror -DNDEBUG
 LDFLAGS=-lnf -lpq -pthread

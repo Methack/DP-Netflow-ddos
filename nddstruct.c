@@ -26,7 +26,8 @@ void ndd_init_filter(ndd_filter_t **f, char *fs, char *t){
                 p->coefficient = -1;
                 p->db_insert_interval = -1;
                 p->max_baseline_increase = -1;
-		p->active_filter_duration = -1;
+                p->active_filter_duration = -1;
+                p->max_top_x = -1;
                 memset(p->db_columns, 0, col_count*sizeof(int));
                 *f = p;
         }
@@ -36,6 +37,17 @@ void ndd_free_filter(ndd_filter_t *f, int delete_table){
         if(f){
                 lnf_filter_free(f->filter);
                 free(f->filter_string);
+		pthread_mutex_destroy(&f->stream_lock);
+
+		if(f->db_table[1] != 'O'){
+			char filepath[STRING_MAX];
+			strcpy(filepath, "./datasets/");
+        		strcat(filepath, f->db_table);
+        		remove(filepath);
+
+	        	printf("Dataset dir removed \'%s\'\n", filepath);
+		}
+
                 //Check if data stored in database, by this filter, is to be removed
                 if(delete_table && f->db_table[1] != 'O'){
                         if(ndd_db_drop_table(f->db_table))
@@ -98,6 +110,7 @@ void ndd_print_filter_info(ndd_filter_t *f, int i, FILE *stream, char dest){
                 }
 		fprintf(stream, "\n");
 		fprintf(stream, "	Active_filter_duration - %d\n", f->active_filter_duration);
+		fprintf(stream, "	Max_top_x - %d\n", f->max_top_x);
         }
 }
 
@@ -198,11 +211,16 @@ void ndd_init_activef(ndd_activef_t **a){
                 f->filter_string = NULL;
                 f->tstart = 0;
                 f->tstop = 0;
+		f->filtered_bytes = 0;
+		f->filtered_packets = 0;
                 f->next = NULL;
         }
 }
 
 void ndd_free_activef(ndd_activef_t *a){
+	if(!a)
+		return;
+	ndd_db_update_active_filter(a);
         if(active_filters == a)
                 active_filters = a->next;
         if(a->filter != NULL)
@@ -212,6 +230,24 @@ void ndd_free_activef(ndd_activef_t *a){
         free(a);
 }
 
+void ndd_remove_old_active_filters(){
+	uint64_t cur = (uint64_t)time(NULL);
+	ndd_activef_t *f = active_filters;
+        ndd_activef_t *prev = NULL;
+        while(f){
+                if(f->tstop < (cur-60)){
+                        ndd_activef_t *tmp = f;
+                        f = f->next;
+                        if(prev)
+                                prev->next = f;
+
+                        active_filters_count--;
+                        ndd_free_activef(tmp);
+                }
+                prev = f;
+                f = f->next;
+        }
+}
 
 int ndd_add_active_filter(lnf_filter_t *flt, char *filter_string, uint64_t duration, char *table){
         pthread_mutex_lock(&active_filters_lock);
@@ -224,29 +260,13 @@ int ndd_add_active_filter(lnf_filter_t *flt, char *filter_string, uint64_t durat
         new->tstart = cur;
         new->tstop = cur + duration;
 
-        //remove old non-active filters
-        ndd_activef_t *f = active_filters;
-        ndd_activef_t *prev = NULL;
-        while(f){
-                if(f->tstop < (cur-60)){
-                        ndd_activef_t *tmp = f;
-                        f = f->next;
-
-                        if(prev)
-                                prev->next = f;
-
-                        active_filters_count--;
-                        ndd_free_activef(tmp);
-                }
-                prev = f;
-                f = f->next;
-        }
-
+	ndd_remove_old_active_filters();
+        
         //append new active filter
         if(!active_filters){
                 active_filters = new;
         }else{
-                f = active_filters;
+                ndd_activef_t *f = active_filters;
                 while(f->next){
                         f = f->next;
                 }
@@ -265,6 +285,8 @@ int ndd_add_active_filter(lnf_filter_t *flt, char *filter_string, uint64_t durat
 
 int ndd_get_active_filters(lnf_filter_t **l){
         //only get not expired filters
+	ndd_remove_old_active_filters();
+
         ndd_activef_t *f = active_filters;
         uint64_t cur = (uint64_t)time(NULL);
         int i = 0;
@@ -280,6 +302,23 @@ int ndd_get_active_filters(lnf_filter_t **l){
 
         }
         return i;
+}
+
+void ndd_update_active_filters_stats(lnf_filter_t **act_filters,int act_filters_count, uint64_t *filtered_bytes, uint64_t *filtered_packets){
+	ndd_activef_t *f = active_filters;
+	int i = 0;
+	while(f){
+		if(f->filter == act_filters[i]){
+			printf("In update -> added filtered\n");
+			f->filtered_bytes += filtered_bytes[i];
+			f->filtered_packets += filtered_packets[i];
+			printf("Values %lu , %lu \n", f->filtered_bytes, f->filtered_packets);
+			i++;
+		}
+		if(i == act_filters_count)
+			break;
+		f = f->next;
+	}
 }
 
 void ndd_print_active_filters(FILE *stream){
@@ -308,9 +347,3 @@ void ndd_print_active_filters(FILE *stream){
                 f = f->next;
         }
 }
-
-
-
-
-
-

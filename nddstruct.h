@@ -7,14 +7,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#include "db.h"
-
-#define LLUI long long unsigned int
-#define STRING_MAX 1024
-#define ERROR_MESSAGE 1
-#define NORMAL_MESSAGE 0
-
-
 //typedef structures
 typedef struct Ndd_rec{
         lnf_brec1_t brec;
@@ -30,7 +22,7 @@ typedef struct Ndd_filter {
         char *filter_string;
         ndd_rec_t **stream;
         pthread_mutex_t stream_lock;
-        int stream_elements;
+	int stream_elements;
         char *db_table;
         int baseline_window;
         int dataset_window;
@@ -40,6 +32,7 @@ typedef struct Ndd_filter {
         int thstep;
         int thsteps;
 	int active_filter_duration;
+	int max_top_x;
         int max_baseline_increase;
         int max_newest_cutoff;
         int coefficient;
@@ -62,12 +55,22 @@ typedef struct Ndd_activef{
         char *filter_string;
         uint64_t tstart;
         uint64_t tstop;
+	uint64_t filtered_bytes;
+	uint64_t filtered_packets;
 
         struct Ndd_activef *next;
 } ndd_activef_t;
 
+#include "db.h"
+
+#define LLUI long long unsigned int
+#define STRING_MAX 1024
+#define ERROR_MESSAGE 1
+#define NORMAL_MESSAGE 0
+
 //global variables
 extern int write_stats;
+extern int filters_count;
 extern int active_filters_count;
 extern pthread_mutex_t active_filters_lock;
 extern ndd_activef_t *active_filters;
@@ -101,8 +104,8 @@ void ndd_init_activef(ndd_activef_t **a);
 void ndd_free_activef(ndd_activef_t *a);
 int ndd_add_active_filter(lnf_filter_t *flt, char *filter_string, uint64_t duration, char *table);
 int ndd_get_active_filters(lnf_filter_t **l);
+void ndd_remove_old_active_filters();
+void ndd_update_active_filters_stats(lnf_filter_t **act_filters, int act_filters_count, uint64_t *filtered_bytes, uint64_t *filtered_packets);
 void ndd_print_active_filters(FILE *stream);
-
-
 #endif
 

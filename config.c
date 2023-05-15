@@ -103,6 +103,16 @@ int ndd_config_parse_fint(int value, int field, ndd_filter_t *f, ndd_filter_t *d
 			}
 			break;
 		}
+		case NDD_MAX_TOP_X : {
+			if(f == NULL){
+				target_value = &d->max_top_x;
+			}else{
+				target_value = &f->max_top_x;
+				if(d->max_top_x < 0)
+					d->max_top_x = value;
+			}
+			break;
+		}
 	}
 
 	if(*target_value > 0){
@@ -167,7 +177,19 @@ int ndd_config_parse(){
 	char tmp[STRING_MAX];
 	int itmp;
 	int skip = 0;
+	int files_expected = file_count;
 
+	if(file_count > 1){
+		nfcapd_files = malloc(file_count * sizeof(char *));
+		if(!nfcapd_files){
+			fprintf(stderr, "Failed to allocate memory\n");
+			exit(1);
+		}
+		for(int i = 0; i < file_count; i++){
+			nfcapd_files[i] = NULL;
+		}
+
+	}
 	ndd_filter_t *f1 = NULL;
 
 	ndd_filter_t *defaults;
@@ -184,12 +206,21 @@ int ndd_config_parse(){
 		if(sscanf(line, " %[#]", tmp))
 			continue;
 		//Nfcapd_current - source file
-		if(sscanf(line, " nfcapd_current = \"%[^\"]", tmp)){
-			if(nfcapd_current){
-				fprintf(stderr, "Reccuring definition of nfcapd_current found on line %d\n", line_number);
+		if(sscanf(line, " nfcapd_file = \"%[^\"]", tmp)){
+			if(files_expected == 0){
+				fprintf(stderr, "Found more definitions of nfcapd_file than expected on line %d\n", line_number);
 				continue;
 			}
-			nfcapd_current = strdup(tmp);
+			if(access(tmp, F_OK) != 0){
+				fprintf(stderr, "File doesn't exist: %s\n", tmp);
+				continue;
+			}
+			if(file_count > 1){
+				nfcapd_files[file_count - files_expected] = strdup(tmp);
+			}else{
+				nfcapd_current = strdup(tmp);
+			}
+			files_expected--;
 			continue;
 		}
 		//Connection string
@@ -208,27 +239,27 @@ int ndd_config_parse(){
 		//New Filter
 		if(sscanf(line, " filter = \"%[^\"]", tmp)){
 			int con;
-                	lnf_filter_t *f;
+			lnf_filter_t *f;
 			if((con = lnf_filter_init_v1(&f, tmp)) != LNF_OK){
-                        	fprintf(stderr, "Failed to initialise libnf filter (%d): \"%s\" on line %d\n", con, tmp, line_number);
-                        	skip = 1;
-                        	continue;
-                	}
-			
+				fprintf(stderr, "Failed to initialise libnf filter (%d): \"%s\" on line %d\n", con, tmp, line_number);
+				skip = 1;
+				continue;
+			}
+	
 			filters_count++;
 
-                	ndd_init_filter(&f1, tmp, NULL);
+			ndd_init_filter(&f1, tmp, NULL);
 
-                	f1->filter = f;
+			f1->filter = f;
 			ptr_filters[filters_count] = f1;
 			
 			skip = 0;
-	                continue;
+			continue;
 		}
 		//Columns
 		if(sscanf(line, " columns = \"%[^\"]", tmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
+				continue;
 			for(int i = 0; i < col_count; i++){
 				if(strstr(tmp, col[i])){
 					if(f1){
@@ -244,7 +275,7 @@ int ndd_config_parse(){
 		//Eval_items
 		if(sscanf(line, " eval_items = \"%[^\"]", tmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
+				continue;
 			if(f1)
 				ndd_fill_items(tmp, f1->eval_items);
 			else
@@ -252,49 +283,49 @@ int ndd_config_parse(){
 			continue;
 		}
 		//Required_items
-                if(sscanf(line, " required_items = \"%[^\"]", tmp)){
-                        if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        if(f1)
-                                ndd_fill_items(tmp, f1->required_items);
-                        else
-                                ndd_fill_items(tmp, defaults->required_items);
-                        continue;
-                }
+		if(sscanf(line, " required_items = \"%[^\"]", tmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			if(f1)
+				ndd_fill_items(tmp, f1->required_items);
+			else
+				ndd_fill_items(tmp, defaults->required_items);
+			continue;
+		}
 		//Baseline_window
 		if(sscanf(line, " baseline_window = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
 				continue;
-	                ndd_config_parse_fint(itmp, NDD_BASELINE_WINDOW, f1, defaults, line_number);
+			ndd_config_parse_fint(itmp, NDD_BASELINE_WINDOW, f1, defaults, line_number);
 			continue;
 		}
 		//Max_newest_cutoff
 		if(sscanf(line, " max_newest_cutoff = %d", &itmp)){
-                	if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_MAX_NEWEST_CUTOFF, f1, defaults, line_number);
-                        continue;
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_MAX_NEWEST_CUTOFF, f1, defaults, line_number);
+			continue;
 		}
 		//Coefficient
 		if(sscanf(line, " coefficient = %d", &itmp)){
-                	if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_COEFFICIENT, f1, defaults, line_number);
-                        continue;
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_COEFFICIENT, f1, defaults, line_number);
+			continue;
 		}
 		//Db_insert_interval
 		if(sscanf(line, " db_insert_interval = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_DB_INSERT_INTERVAL, f1, defaults, line_number);
-                        continue;
-                }
+				continue;
+			ndd_config_parse_fint(itmp, NDD_DB_INSERT_INTERVAL, f1, defaults, line_number);
+			continue;
+		}
 		//Max_baseline_increase
 		if(sscanf(line, " max_baseline_increase = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
+				continue;
 			ndd_config_parse_fint(itmp, NDD_MAX_BASELINE_INCREASE, f1, defaults, line_number);
-                        continue;
+			continue;
 		}
 		//Dataset_window
 		if(sscanf(line, " dataset_window = %d", &itmp)){
@@ -304,31 +335,37 @@ int ndd_config_parse(){
 			continue;
 		}
 		//Dataset_chunks
-                if(sscanf(line, " dataset_chunks = %d", &itmp)){
-                        if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_DATASET_CHUNKS, f1, defaults, line_number);
-                        continue;
-                }
+		if(sscanf(line, " dataset_chunks = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_DATASET_CHUNKS, f1, defaults, line_number);
+			continue;
+		}
 		//Thsteps
-                if(sscanf(line, " thsteps = %d", &itmp)){
-                        if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_THSTEPS, f1, defaults, line_number);
-                        continue;
-                }
+		if(sscanf(line, " thsteps = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_THSTEPS, f1, defaults, line_number);
+			continue;
+		}
 		//Thstep
-                if(sscanf(line, " thstep = %d", &itmp)){
-                        if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_THSTEP, f1, defaults, line_number);
-                        continue;
-                }
+		if(sscanf(line, " thstep = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_THSTEP, f1, defaults, line_number);
+			continue;
+		}
 		if(sscanf(line, " active_filter_duration = %d", &itmp)){
 			if(skip) //Skip - This value bellongs to failed filter
-                                continue;
-                        ndd_config_parse_fint(itmp, NDD_ACTIVE_FILTER_DURATION, f1, defaults, line_number);
-                        continue;
+				continue;
+			ndd_config_parse_fint(itmp, NDD_ACTIVE_FILTER_DURATION, f1, defaults, line_number);
+			continue;
+		}
+		if(sscanf(line, " max_top_x = %d", &itmp)){
+			if(skip) //Skip - This value bellongs to failed filter
+				continue;
+			ndd_config_parse_fint(itmp, NDD_MAX_TOP_X, f1, defaults, line_number);
+			continue;
 		}
 
 		fprintf(stderr, "Syntax error parsing config on line %d\n", line_number);
@@ -344,21 +381,30 @@ int ndd_config_parse(){
 	}
 	
 	//No nfcapd_current path in config, abort
-	if(!nfcapd_current){
-		fprintf(stderr, "Missing nfcapd_current in config\n");
+	if(!nfcapd_current && file_count == 1){
+		fprintf(stderr, "Missing nfcapd_file in config\n");
 		exit(1);
+	}
+
+	if(file_count > 1){
+		for(int i = 0; i < file_count; i++){
+			if(!nfcapd_files[i]){
+				fprintf(stderr, "Missing one or more nfcapd_files in config\n");
+				exit(1);
+			}
+		}
 	}
 
 	//Failed to create dataset dir, abort
 	if(mkdir("./datasets/", 0777) && errno != EEXIST){
-                fprintf(stderr, "Failed to create dataset dir - %s\n", strerror(errno));
-                exit(1);
-        }
+		fprintf(stderr, "Failed to create dataset dir - %s\n", strerror(errno));
+		exit(1);
+	}
 
 
 	//Current time - used for unique db table names
-        char t[11];
-        snprintf(t, 11, "%"PRIu64, (uint64_t)time(NULL));
+	char t[11];
+	snprintf(t, 11, "%"PRIu64, (uint64_t)time(NULL));
 
 	int fc = 1;
 	//Check missing values and insert default ones
@@ -414,25 +460,24 @@ int ndd_config_parse(){
 		}
 		if(!ndd_active_array_items(f->eval_items, items_count)){
 			if(!ndd_active_array_items(defaults->eval_items, items_count)){
-				fprintf(stderr, "Missing default value for eval_items - These will be used : srcport dstip srcip\n");
-				defaults->eval_items[0] = 4;
-				defaults->eval_items[1] = 2;
-				defaults->eval_items[2] = 1;
+				fprintf(stderr, "Missing default value for eval_items - These will be used : dstip srcip\n");
+				defaults->eval_items[0] = 2;
+				defaults->eval_items[1] = 1;
 			}
 			for(int i = 0; i < items_count; i++){
 				f->eval_items[i] = defaults->eval_items[i];
 			}
 		}
 		if(!ndd_active_array_items(f->required_items, items_count)){
-                        if(!ndd_active_array_items(defaults->required_items, items_count)){
-                                fprintf(stderr, "Missing default value for required_items - These will be used : dstip srcip\n");
-                                defaults->required_items[0] = 2;
-                                defaults->required_items[1] = 1;
-                        }
-                        for(int i = 0; i < items_count; i++){
-                                f->required_items[i] = defaults->required_items[i];
-                        }
-                }
+			if(!ndd_active_array_items(defaults->required_items, items_count)){
+				fprintf(stderr, "Missing default value for required_items - These will be used : dstip srcip\n");
+				defaults->required_items[0] = 2;
+				defaults->required_items[1] = 1;
+			}
+			for(int i = 0; i < items_count; i++){
+				f->required_items[i] = defaults->required_items[i];
+			}
+		}
 		if(f->dataset_window < 0){
 			if(defaults->dataset_window < 0){
 				fprintf(stderr, "Missing default value for dataset_window - Value \'%d\' will be used\n", DEFAULT_DATASET_WINDOW);
@@ -468,17 +513,24 @@ int ndd_config_parse(){
 			}
 			f->active_filter_duration = defaults->active_filter_duration;
 		}
+		if(f->max_top_x < 0){
+			if(defaults->max_top_x < 0){
+				fprintf(stderr, "Missing default value for max_top_x - Value \'%d\' will be used\n", DEFAULT_MAX_TOP_X);
+				defaults->max_top_x = DEFAULT_MAX_TOP_X;
+			}
+			f->max_top_x = defaults->max_top_x;
+		}
 
 		//Create table in db
 		char tmp[STRING_MAX];
-                sprintf(tmp, "ndd%sf%d",t,i);
+		sprintf(tmp, "ndd%sf%d",t,i);
 		if(!ndd_db_create_table(tmp, f->db_columns, f->filter_string)){
 			//Failed to create table
 			fprintf(stderr, "Failed to create table \'%s\', filter will be skipped\n", tmp);
 			ptr_filters[i] = NULL;
 			ndd_free_filter(f, 0);
 			continue;
-                }
+		}
 		printf("Table created \'%s\'\n", tmp);
 		f->db_table = strdup(tmp);
 
@@ -500,12 +552,19 @@ int ndd_config_parse(){
 	
 	filters = malloc(sizeof(ndd_filter_t *) * fc);
 
-        if(!filters){
-                fprintf(stderr, "Couldn't allocate memory for filters\n");
-                exit(1);
-        }
+	if(!filters){
+		fprintf(stderr, "Couldn't allocate memory for filters\n");
+		exit(1);
+	}
 
-
+	printf("Found file paths in order: %d\n", file_count);
+	if(file_count == 1){
+		printf("	%s\n", nfcapd_current);
+	}else{
+		for(int i = 0; i < file_count; i++){
+			printf("	%s\n", nfcapd_files[i]);	
+		}
+	}
 	//Fill global filters container
 	int c = 0;
 	for(int i = 0; i <= filters_count; i++){
@@ -516,6 +575,11 @@ int ndd_config_parse(){
 		}
 	}
 	filters_count = c;
+	if(c <= 1){
+		fprintf(stderr, "No valid input-filter detected\n");
+		exit(1);
+	}
+	printf("Total number of detected filters - %d\n", filters_count-1);
 	
 	return 0;
 }
