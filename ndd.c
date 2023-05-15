@@ -167,7 +167,6 @@ void *ndd_process_filter_stream(void *p){
 		if((*new) == NULL){
 			//there are no records
 			pthread_mutex_unlock(&f->stream_lock);
-			asd = 0;
 			usleep(50);
 			continue;
 		}
@@ -178,8 +177,7 @@ void *ndd_process_filter_stream(void *p){
 			(*new) = (*new)->next;
 		}else{
 			pthread_mutex_unlock(&f->stream_lock);
-			asd = 0;
-			//usleep(50);
+			usleep(50);
 			continue;
 		}
 
@@ -611,7 +609,7 @@ int ndd_process_file(){
 							printf("Main filtered %luB in last 30s window with %d active-filters\n", filtered_sum, active_filters_count);
 						if(logging){
 							sprintf(msg, "Main filtered %luB in last 30s window with %d active-filters\n", filtered_sum, active_filters_count);
-							ndd_fill_comm(msg, NORMAL_MESSAGE, 0);
+						ndd_fill_comm(msg, NORMAL_MESSAGE, 0);
 						}
 						filtered_sum = 0;
 					}
