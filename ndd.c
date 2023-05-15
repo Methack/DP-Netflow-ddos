@@ -648,7 +648,7 @@ int ndd_process_file(){
 		if(pthread_join(th[i], NULL)){
 			if(logging)
 				ndd_fill_comm("Error joining threads\n", ERROR_MESSAGE, 0);
-				fprintf(stderr, "Error joining threads\n");
+			fprintf(stderr, "Error joining threads\n");
         	}
 	}
 
